@@ -137,21 +137,21 @@ async def get_dashboard(
         SELECT
             p.chave AS vendedor_id,
             p.nome AS vendedor_nome,
-            COUNT(pv."fk_movimentacao_estoque$movimentacao_estoque") AS qtd_pedidos,
+            COUNT(DISTINCT me.pk_chave) AS qtd_pedidos,
             COALESCE(SUM(
-                (SELECT COALESCE(SUM(
-                    ABS(ime.quantidade) * ime.vr_unitario_bruto
-                    - ime.vr_desconto_total
-                    + ime.vr_acrescimo_total
-                ), 0)
-                FROM marilia.itens_movimentacao_estoque ime
-                WHERE ime."fk_movimentacao_estoque$movimentacao_estoque" = me.pk_chave)
+                ABS(ime.quantidade) * ime.vr_unitario_bruto
+                - ime.vr_desconto_total
+                + ime.vr_acrescimo_total
             ), 0) AS total_vendas
-        FROM marilia.pedido_venda pv
+        FROM marilia.itens_movimentacao_estoque ime
         JOIN marilia.movimentacao_estoque me
-            ON me.pk_chave = pv."fk_movimentacao_estoque$movimentacao_estoque"
+            ON me.pk_chave = ime."fk_movimentacao_estoque$movimentacao_estoque"
+        JOIN marilia.pedido_venda pv
+            ON pv."fk_movimentacao_estoque$movimentacao_estoque" = me.pk_chave
+        LEFT JOIN marilia.itens_movimentacao_estoque_pedido_venda impv
+            ON impv."fk_itens_movimentacao_estoque$item_movimentacao" = ime.pk_chave
         JOIN cadastros.pessoas p
-            ON p.chave = pv."fk_pessoas$vendedor"
+            ON p.chave = COALESCE(impv."fk_pessoas$vendedor", pv."fk_pessoas$vendedor")
         WHERE me."fk_tipos_movimentacao$tipo_movimento" = :tipo_venda
           AND me.data BETWEEN :data_inicio AND :data_fim
         GROUP BY p.chave, p.nome
@@ -224,7 +224,20 @@ async def listar_pedidos_venda(
     }
 
     if vendedor_id:
-        conditions.append("pv.\"fk_pessoas$vendedor\" = :vendedor_id")
+        # MUDANÇA: Filtro OR para buscar vendedor no cabeçalho OU nos itens
+        conditions.append("""(
+            pv."fk_pessoas$vendedor" = :vendedor_id 
+            OR EXISTS (
+                SELECT 1 
+                FROM marilia.itens_movimentacao_estoque_pedido_venda impv
+                WHERE impv."fk_itens_movimentacao_estoque$item_movimentacao" IN (
+                    SELECT ime.pk_chave 
+                    FROM marilia.itens_movimentacao_estoque ime
+                    WHERE ime."fk_movimentacao_estoque$movimentacao_estoque" = me.pk_chave
+                )
+                AND impv."fk_pessoas$vendedor" = :vendedor_id
+            )
+        )""")
         params["vendedor_id"] = vendedor_id
 
     if cliente_id:
@@ -314,11 +327,15 @@ async def get_pedido_venda_detalhe(db: AsyncSession, pedido_id: int) -> dict:
             ABS(ime.quantidade) * ime.vr_unitario_bruto
                 - ime.vr_desconto_total + ime.vr_acrescimo_total AS vr_total_liquido,
             COALESCE(impv.item_devolvido, false) AS item_devolvido,
-            COALESCE(impv.quantidade_devolvida, 0) AS quantidade_devolvida
+            COALESCE(impv.quantidade_devolvida, 0) AS quantidade_devolvida,
+            COALESCE(impv."fk_pessoas$vendedor", :vendedor_cabecalho_id) AS vendedor_id,
+            pven_item.nome AS vendedor_nome
         FROM marilia.itens_movimentacao_estoque ime
         LEFT JOIN cadastros.produtos pr ON pr.pk_chave = ime."fk_produtos$produto"
         LEFT JOIN marilia.itens_movimentacao_estoque_pedido_venda impv
             ON impv."fk_itens_movimentacao_estoque$item_movimentacao" = ime.pk_chave
+        LEFT JOIN cadastros.pessoas pven_item
+            ON pven_item.chave = COALESCE(impv."fk_pessoas$vendedor", :vendedor_cabecalho_id)
         WHERE ime."fk_movimentacao_estoque$movimentacao_estoque" = :pedido_id
         ORDER BY ime.pk_chave
     """)
@@ -327,7 +344,9 @@ async def get_pedido_venda_detalhe(db: AsyncSession, pedido_id: int) -> dict:
     if not cab:
         return None
 
-    itens_rows = (await db.execute(sql_itens, {"pedido_id": pedido_id})).all()
+    vendedor_cabecalho_id = cab.vendedor_id
+
+    itens_rows = (await db.execute(sql_itens, {"pedido_id": pedido_id, "vendedor_cabecalho_id": vendedor_cabecalho_id})).all()
 
     itens = [
         {
@@ -341,6 +360,8 @@ async def get_pedido_venda_detalhe(db: AsyncSession, pedido_id: int) -> dict:
             "vr_total_liquido": Decimal(str(i.vr_total_liquido or 0)),
             "item_devolvido": i.item_devolvido,
             "quantidade_devolvida": Decimal(str(i.quantidade_devolvida or 0)),
+            "vendedor_id": i.vendedor_id,
+            "vendedor_nome": i.vendedor_nome,
         }
         for i in itens_rows
     ]
@@ -384,7 +405,20 @@ async def listar_pre_vendas(
         conditions.append("me.data <= :data_fim")
         params["data_fim"] = data_fim
     if vendedor_id:
-        conditions.append("pv.\"fk_pessoas$vendedor\" = :vendedor_id")
+        # MUDANÇA: Filtro OR para buscar vendedor no cabeçalho OU nos itens
+        conditions.append("""(
+            pv."fk_pessoas$vendedor" = :vendedor_id 
+            OR EXISTS (
+                SELECT 1 
+                FROM marilia.itens_movimentacao_estoque_pre_venda impv
+                WHERE impv."fk_itens_movimentacao_estoque$item_movimentacao" IN (
+                    SELECT ime.pk_chave 
+                    FROM marilia.itens_movimentacao_estoque ime
+                    WHERE ime."fk_movimentacao_estoque$movimentacao_estoque" = me.pk_chave
+                )
+                AND impv."fk_pessoas$vendedor" = :vendedor_id
+            )
+        )""")
         params["vendedor_id"] = vendedor_id
     if cliente_id:
         conditions.append("me.\"fk_pessoas$pessoa\" = :cliente_id")
@@ -482,11 +516,15 @@ async def get_pre_venda_detalhe(db: AsyncSession, pre_venda_id: int) -> dict | N
             ABS(ime.quantidade) * ime.vr_unitario_bruto
                 - ime.vr_desconto_total + ime.vr_acrescimo_total AS vr_total_liquido,
             COALESCE(impv.item_devolvido, false) AS item_devolvido,
-            COALESCE(impv.quantidade_devolvida, 0) AS quantidade_devolvida
+            COALESCE(impv.quantidade_devolvida, 0) AS quantidade_devolvida,
+            COALESCE(impv."fk_pessoas$vendedor", :vendedor_cabecalho_id) AS vendedor_id,
+            pven_item.nome AS vendedor_nome
         FROM marilia.itens_movimentacao_estoque ime
         LEFT JOIN cadastros.produtos pr ON pr.pk_chave = ime."fk_produtos$produto"
         LEFT JOIN marilia.itens_movimentacao_estoque_pre_venda impv
             ON impv."fk_itens_movimentacao_estoque$item_movimentacao" = ime.pk_chave
+        LEFT JOIN cadastros.pessoas pven_item
+            ON pven_item.chave = COALESCE(impv."fk_pessoas$vendedor", :vendedor_cabecalho_id)
         WHERE ime."fk_movimentacao_estoque$movimentacao_estoque" = :id
         ORDER BY ime.pk_chave
     """)
@@ -495,7 +533,9 @@ async def get_pre_venda_detalhe(db: AsyncSession, pre_venda_id: int) -> dict | N
     if not cab:
         return None
 
-    itens_rows = (await db.execute(sql_itens, {"id": pre_venda_id})).all()
+    vendedor_cabecalho_id = cab.vendedor_id
+
+    itens_rows = (await db.execute(sql_itens, {"id": pre_venda_id, "vendedor_cabecalho_id": vendedor_cabecalho_id})).all()
 
     itens = [
         {
@@ -509,6 +549,8 @@ async def get_pre_venda_detalhe(db: AsyncSession, pre_venda_id: int) -> dict | N
             "vr_total_liquido": Decimal(str(i.vr_total_liquido or 0)),
             "item_devolvido": i.item_devolvido,
             "quantidade_devolvida": Decimal(str(i.quantidade_devolvida or 0)),
+            "vendedor_id": i.vendedor_id,
+            "vendedor_nome": i.vendedor_nome,
         }
         for i in itens_rows
     ]
