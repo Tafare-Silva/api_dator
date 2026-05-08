@@ -51,7 +51,7 @@ async def get_pedidos_venda(
     data_fim: date = Query(default=None),
     vendedor_id: int | None = Query(default=None),
     cliente_id: int | None = Query(default=None),
-    limit: int = Query(default=50, le=500),
+    limit: int = Query(default=500, le=5000),
     offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
@@ -93,7 +93,7 @@ async def get_pre_vendas(
     vendedor_id: int | None = Query(default=None),
     cliente_id: int | None = Query(default=None),
     efetivada: bool | None = Query(default=None, description="True=efetivadas, False=pendentes, omitir=todas"),
-    limit: int = Query(default=50, le=500),
+    limit: int = Query(default=500, le=5000),
     offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):

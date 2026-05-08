@@ -1,10 +1,22 @@
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
+from urllib.parse import quote_plus
+from typing import AsyncGenerator
 
 from app.core.config import settings
 
+# Monta a URL codificando a senha corretamente
+DATABASE_URL = (
+    f"postgresql+asyncpg://{settings.DB_USER}:"
+    f"{quote_plus(settings.DB_PASSWORD)}@"
+    f"{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}"
+)
+
+print(f"🔗 Conectando em: postgresql+asyncpg://{settings.DB_USER}:***@{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}")
+print(f"🔑 Senha codificada: {quote_plus(settings.DB_PASSWORD)}")
+
 engine = create_async_engine(
-    settings.DATABASE_URL,
+    DATABASE_URL,
     echo=settings.DEBUG,
     pool_size=10,
     max_overflow=20,
@@ -21,8 +33,7 @@ class Base(DeclarativeBase):
     pass
 
 
-async def get_db() -> AsyncSession:
-    """Dependency para injetar a sessão do banco nas rotas."""
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
         try:
             yield session
