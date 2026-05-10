@@ -1,27 +1,29 @@
 from decimal import Decimal
+from pydantic import BaseModel
 
-from pydantic import BaseModel, Field
 
-
-class ProdutoResponse(BaseModel):
+class ProdutoResumo(BaseModel):
     pk_chave: int
     nome: str | None
+    referencia_fabrica: str | None = None
     preco_venda: Decimal
-    tipo_produto: str
-    fk_unidades_unidade_venda: str = Field(alias="fk_unidades_unidade_venda")
+    estoque: Decimal = Decimal("0")
     inativo: bool
-    categoria: str | None
-    cor: str | None
-    tamanho: str | None
+    categoria: str | None = None
+    cor: str | None = None
+    tamanho: str | None = None
+    colecao: str | None = None
+    marca: str | None = None
+    divisao: str | None = None
+    genero: str | None = None
 
     model_config = {"from_attributes": True}
 
 
-class ProdutoResumo(BaseModel):
-    
-    pk_chave: int
-    nome: str | None
-    preco_venda: Decimal
-    inativo: bool
+class ProdutoDetalhe(ProdutoResumo):
+    tipo_produto: str | None = None
+    unidade_venda: str | None = None
+    aplicacao: str | None = None
+    codigos_barras: list[str] = []
 
     model_config = {"from_attributes": True}

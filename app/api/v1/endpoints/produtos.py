@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.schemas.produto import ProdutoResumo, ProdutoResponse
+from app.schemas.produto import ProdutoResumo, ProdutoDetalhe
 from app.services import produto_service
 
 router = APIRouter(prefix="/produtos", tags=["Produtos"])
@@ -11,12 +11,13 @@ router = APIRouter(prefix="/produtos", tags=["Produtos"])
 @router.get(
     "/",
     response_model=list[ProdutoResumo],
-    summary="Lista produtos disponíveis para lançamento",
+    summary="Lista produtos com busca por nome, referência ou código de barras",
 )
 async def listar_produtos(
-    apenas_ativos: bool = Query(True, description="Filtra apenas produtos ativos"),
-    busca: str | None = Query(None, description="Busca por nome ou categoria"),
-    categoria: str | None = Query(None, description="Filtra por categoria"),
+    apenas_ativos: bool = Query(True),
+    busca: str | None = Query(None, description="Busca por nome ou referência"),
+    categoria: str | None = Query(None),
+    codigo_barras: str | None = Query(None, description="Busca exata por código de barras"),
     limit: int = Query(100, le=500),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
@@ -26,11 +27,12 @@ async def listar_produtos(
         apenas_ativos=apenas_ativos,
         busca=busca,
         categoria=categoria,
+        codigo_barras=codigo_barras,
         limit=limit,
         offset=offset,
     )
 
 
-@router.get("/{produto_id}", response_model=ProdutoResponse, summary="Detalhe de um produto")
+@router.get("/{produto_id}", response_model=ProdutoDetalhe, summary="Detalhe completo de um produto")
 async def detalhar_produto(produto_id: int, db: AsyncSession = Depends(get_db)):
     return await produto_service.buscar_produto(db, produto_id)

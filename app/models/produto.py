@@ -1,15 +1,10 @@
-from sqlalchemy import Boolean, Column, Date, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, Column, Date, Integer, Numeric, String, Text, ForeignKey
 from sqlalchemy.orm import relationship
 
 from app.db.session import Base
 
 
 class Produto(Base):
-    """
-    Reflete a tabela cadastros.produtos do Dator.
-    Este model é somente leitura para o app de mesas — 
-    a manutenção de produtos continua sendo feita pelo Dator.
-    """
     __tablename__ = "produtos"
     __table_args__ = {"schema": "cadastros"}
 
@@ -22,11 +17,29 @@ class Produto(Base):
     tamanho = Column(String(50), nullable=True)
     cor = Column(String(50), nullable=True)
     categoria = Column(String(200), nullable=True)
+    colecao = Column(String, nullable=True)
+    genero = Column(String, nullable=True)
+    referencia_fabrica = Column(String, nullable=True)
 
-    # Chaves estrangeiras (texto, padrão do ERP)
     fk_marcas_marca = Column("fk_marcas$marca", String, nullable=False)
     fk_divisoes_divisao = Column("fk_divisoes$divisao", String, nullable=False)
     fk_unidades_unidade_venda = Column("fk_unidades$unidade_venda", String, nullable=False)
 
     # Relacionamentos
     itens_mesa = relationship("ItemMesa", back_populates="produto")
+    codigos_barras = relationship("CodigoBarras", back_populates="produto")
+
+
+class CodigoBarras(Base):
+    __tablename__ = "codigo_barras"
+    __table_args__ = {"schema": "cadastros"}
+
+    fk_produtos_produto = Column(
+        "fk_produtos$produto",
+        Integer,
+        ForeignKey("cadastros.produtos.pk_chave"),
+        primary_key=True,
+    )
+    codigo_barras = Column(String(13), primary_key=True, nullable=False)
+
+    produto = relationship("Produto", back_populates="codigos_barras")
