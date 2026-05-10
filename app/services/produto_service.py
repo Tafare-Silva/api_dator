@@ -7,6 +7,37 @@ from app.core.exceptions import NotFoundError
 from app.models.produto import Produto, CodigoBarras
 
 
+async def _obter_precos_em_lote(db: AsyncSession, produto_ids: list[int]) -> dict[int, Decimal]:
+    """Busca preços de venda para múltiplos produtos de uma vez."""
+    if not produto_ids:
+        return {}
+    result = await db.execute(
+        text("""
+            SELECT pk_chave, marilia.obter_preco_venda(pk_chave)
+            FROM cadastros.produtos
+            WHERE pk_chave = ANY(:ids)
+        """),
+        {"ids": produto_ids},
+    )
+    return {row[0]: Decimal(str(row[1])) if row[1] else Decimal("0") for row in result.fetchall()}
+
+
+async def _obter_estoques_em_lote(db: AsyncSession, produto_ids: list[int]) -> dict[int, Decimal]:
+    """Busca estoques para múltiplos produtos de uma vez."""
+    if not produto_ids:
+        return {}
+    result = await db.execute(
+        text("""
+            SELECT "fk_produtos$produto", COALESCE(SUM(saldo), 0)
+            FROM cadastros.v_estoque_atual
+            WHERE "fk_produtos$produto" = ANY(:ids)
+            GROUP BY "fk_produtos$produto"
+        """),
+        {"ids": produto_ids},
+    )
+    return {row[0]: Decimal(str(row[1])) for row in result.fetchall()}
+
+
 async def _obter_preco_venda(db: AsyncSession, produto_id: int) -> Decimal:
     """Chama a função marilia.obter_preco_venda do PostgreSQL."""
     result = await db.execute(
@@ -18,9 +49,13 @@ async def _obter_preco_venda(db: AsyncSession, produto_id: int) -> Decimal:
 
 
 async def _obter_estoque(db: AsyncSession, produto_id: int) -> Decimal:
-    """Chama a função marilia.estoque_geral do PostgreSQL."""
+    """Busca estoque de um produto."""
     result = await db.execute(
-        text("SELECT marilia.estoque_geral(:produto_id)"),
+        text("""
+            SELECT COALESCE(SUM(saldo), 0)
+            FROM cadastros.v_estoque_atual
+            WHERE "fk_produtos$produto" = :produto_id
+        """),
         {"produto_id": produto_id},
     )
     estoque = result.scalar_one_or_none()
@@ -38,24 +73,19 @@ async def listar_produtos(
 ) -> list[dict]:
     from sqlalchemy import or_
 
-    # Busca por código de barras — retorna apenas o produto correspondente
+    # Busca por código de barras
     if codigo_barras:
         result = await db.execute(
-            select(CodigoBarras).where(
-                CodigoBarras.codigo_barras == codigo_barras
-            )
+            select(CodigoBarras).where(CodigoBarras.codigo_barras == codigo_barras)
         )
         cb = result.scalar_one_or_none()
         if not cb:
             return []
-        produto_ids = [cb.fk_produtos_produto]
-        query = select(Produto).where(Produto.pk_chave.in_(produto_ids))
+        query = select(Produto).where(Produto.pk_chave == cb.fk_produtos_produto)
     else:
         query = select(Produto)
-
         if apenas_ativos:
             query = query.where(Produto.inativo == False)  # noqa: E712
-
         if busca:
             termo = f"%{busca}%"
             query = query.where(
@@ -65,7 +95,6 @@ async def listar_produtos(
                     Produto.referencia_fabrica.ilike(termo),
                 )
             )
-
         if categoria:
             query = query.where(Produto.categoria.ilike(f"%{categoria}%"))
 
@@ -73,16 +102,21 @@ async def listar_produtos(
     result = await db.execute(query)
     produtos = list(result.scalars().all())
 
-    resultado = []
-    for p in produtos:
-        preco = await _obter_preco_venda(db, p.pk_chave)
-        estoque = await _obter_estoque(db, p.pk_chave)
-        resultado.append({
+    if not produtos:
+        return []
+
+    # ✅ Busca preços e estoques em LOTE — muito mais rápido
+    ids = [p.pk_chave for p in produtos]
+    precos = await _obter_precos_em_lote(db, ids)
+    estoques = await _obter_estoques_em_lote(db, ids)
+
+    return [
+        {
             "pk_chave": p.pk_chave,
             "nome": p.nome,
             "referencia_fabrica": p.referencia_fabrica,
-            "preco_venda": preco,
-            "estoque": estoque,
+            "preco_venda": precos.get(p.pk_chave, Decimal("0")),
+            "estoque": estoques.get(p.pk_chave, Decimal("0")),
             "inativo": p.inativo,
             "categoria": p.categoria,
             "cor": p.cor,
@@ -91,14 +125,13 @@ async def listar_produtos(
             "marca": p.fk_marcas_marca,
             "divisao": p.fk_divisoes_divisao,
             "genero": p.genero,
-        })
-    return resultado
+        }
+        for p in produtos
+    ]
 
 
 async def buscar_produto(db: AsyncSession, produto_id: int) -> dict:
-    result = await db.execute(
-        select(Produto).where(Produto.pk_chave == produto_id)
-    )
+    result = await db.execute(select(Produto).where(Produto.pk_chave == produto_id))
     produto = result.scalar_one_or_none()
     if not produto:
         raise NotFoundError("Produto", produto_id)
@@ -106,11 +139,8 @@ async def buscar_produto(db: AsyncSession, produto_id: int) -> dict:
     preco = await _obter_preco_venda(db, produto_id)
     estoque = await _obter_estoque(db, produto_id)
 
-    # Busca códigos de barras do produto
     result_cb = await db.execute(
-        select(CodigoBarras).where(
-            CodigoBarras.fk_produtos_produto == produto_id
-        )
+        select(CodigoBarras).where(CodigoBarras.fk_produtos_produto == produto_id)
     )
     codigos_barras = [cb.codigo_barras for cb in result_cb.scalars().all()]
 
