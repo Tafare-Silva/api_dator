@@ -11,13 +11,14 @@ router = APIRouter(prefix="/produtos", tags=["Produtos"])
 @router.get(
     "/",
     response_model=list[ProdutoResumo],
-    summary="Lista produtos com busca por nome, referência ou código de barras",
+    summary="Lista produtos com busca por nome, referência, código ou código de barras",
 )
 async def listar_produtos(
     apenas_ativos: bool = Query(True),
     busca: str | None = Query(None, description="Busca por nome ou referência"),
     categoria: str | None = Query(None),
-    codigo_barras: str | None = Query(None, description="Busca exata por código de barras"),
+    codigo_barras: str | None = Query(None, description="Busca por código de barras ou pk_chave"),
+    pk_chave_exato: int | None = Query(None, description="Busca exata por código interno (pk_chave)"),
     limit: int = Query(100, le=500),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
@@ -28,6 +29,7 @@ async def listar_produtos(
         busca=busca,
         categoria=categoria,
         codigo_barras=codigo_barras,
+        pk_chave_exato=pk_chave_exato,
         limit=limit,
         offset=offset,
     )
