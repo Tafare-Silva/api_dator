@@ -108,16 +108,17 @@ async def get_dashboard(
             rel.vr_total_vendas,
             rel.vr_total_devolucoes,
             p.chave AS vendedor_id,
-            COUNT(DISTINCT me.pk_chave) AS qtd_pedidos
+            (
+                SELECT COUNT(DISTINCT pv2."fk_movimentacao_estoque$movimentacao_estoque")
+                FROM marilia.pedido_venda pv2
+                JOIN marilia.movimentacao_estoque me2
+                    ON me2.pk_chave = pv2."fk_movimentacao_estoque$movimentacao_estoque"
+                WHERE me2."fk_tipos_movimentacao$tipo_movimento" = :tipo_venda
+                AND me2.data BETWEEN :data_inicio AND :data_fim
+                AND pv2."fk_pessoas$vendedor" = p.chave
+            ) AS qtd_pedidos
         FROM marilia.relatorio_vendas_por_vendedor(:data_inicio, :data_fim) AS rel
         LEFT JOIN cadastros.pessoas p ON p.nome = rel.nome_vendedor
-        LEFT JOIN marilia.movimentacao_estoque me
-            ON me."fk_tipos_movimentacao$tipo_movimento" = :tipo_venda
-            AND me.data BETWEEN :data_inicio AND :data_fim
-        LEFT JOIN marilia.pedido_venda pv
-            ON pv."fk_movimentacao_estoque$movimentacao_estoque" = me.pk_chave
-            AND pv."fk_pessoas$vendedor" = p.chave
-        GROUP BY rel.nome_vendedor, rel.vr_total_vendas, rel.vr_total_devolucoes, p.chave
         ORDER BY rel.vr_total_vendas DESC
         LIMIT 10
     """)
