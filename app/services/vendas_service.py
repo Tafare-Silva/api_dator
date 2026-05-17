@@ -2,10 +2,10 @@
 Serviço de vendas — toda a lógica de consulta fica aqui,
 os endpoints são apenas roteadores finos.
 """
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import and_, func, select, text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -18,13 +18,11 @@ from app.models.vendas import (
     PreVenda,
 )
 
-# Tipo de movimentação que identifica vendas no ERP
 TIPO_VENDA = "VENDA DE MERCADORIA"
 TIPO_PRE_VENDA = "PRE-VENDA"
 
 
 def _calcular_vr_total_item(item: ItemMovimentacaoEstoque) -> Decimal:
-    """Valor líquido do item: (qtd * unitario) - desconto + acrescimo"""
     bruto = abs(item.quantidade) * item.vr_unitario_bruto
     return bruto - item.vr_desconto_total + item.vr_acrescimo_total
 
@@ -64,40 +62,10 @@ async def get_dashboard(
 ) -> dict:
     hoje = date.today()
 
-    # Query base para vendas no período
-    stmt_periodo = (
-        select(
-            func.count(PedidoVenda.fk_movimentacao_estoque_movimentacao_estoque).label("qtd"),
-            func.coalesce(
-                func.sum(
-                    select(func.sum(
-                        ItemMovimentacaoEstoque.quantidade * ItemMovimentacaoEstoque.vr_unitario_bruto
-                        - ItemMovimentacaoEstoque.vr_desconto_total
-                        + ItemMovimentacaoEstoque.vr_acrescimo_total
-                    ))
-                    .where(ItemMovimentacaoEstoque.fk_movimentacao_estoque_movimentacao_estoque
-                           == PedidoVenda.fk_movimentacao_estoque_movimentacao_estoque)
-                    .correlate(PedidoVenda)
-                    .scalar_subquery()
-                ), Decimal("0")
-            ).label("total"),
-        )
-        .join(MovimentacaoEstoque,
-              MovimentacaoEstoque.pk_chave
-              == PedidoVenda.fk_movimentacao_estoque_movimentacao_estoque)
-        .where(
-            and_(
-                MovimentacaoEstoque.fk_tipos_movimentacao_tipo_movimento == TIPO_VENDA,
-                MovimentacaoEstoque.data >= data_inicio,
-                MovimentacaoEstoque.data <= data_fim,
-            )
-        )
-    )
-
-    # Usa SQL direto para performance — mais simples e rápido
+    # ✅ Totais do período usando query direta
     sql_dashboard = text("""
         SELECT
-            COUNT(pv.fk_movimentacao_estoque$movimentacao_estoque) AS qtd_pedidos,
+            COUNT(pv."fk_movimentacao_estoque$movimentacao_estoque") AS qtd_pedidos,
             COALESCE(SUM(
                 (SELECT COALESCE(SUM(
                     ABS(ime.quantidade) * ime.vr_unitario_bruto
@@ -116,7 +84,7 @@ async def get_dashboard(
 
     sql_hoje = text("""
         SELECT
-            COUNT(pv.fk_movimentacao_estoque$movimentacao_estoque) AS qtd_pedidos,
+            COUNT(pv."fk_movimentacao_estoque$movimentacao_estoque") AS qtd_pedidos,
             COALESCE(SUM(
                 (SELECT COALESCE(SUM(
                     ABS(ime.quantidade) * ime.vr_unitario_bruto
@@ -133,37 +101,34 @@ async def get_dashboard(
           AND me.data = :hoje
     """)
 
+    # ✅ RANKING usa a função oficial do ERP para garantir consistência com o ERP
     sql_ranking = text("""
         SELECT
+            rel.nome_vendedor,
+            rel.vr_total_vendas,
+            rel.vr_total_devolucoes,
             p.chave AS vendedor_id,
-            p.nome AS vendedor_nome,
-            COUNT(DISTINCT me.pk_chave) AS qtd_pedidos,
-            COALESCE(SUM(
-                ABS(ime.quantidade) * ime.vr_unitario_bruto
-                - ime.vr_desconto_total
-                + ime.vr_acrescimo_total
-            ), 0) AS total_vendas
-        FROM marilia.itens_movimentacao_estoque ime
-        JOIN marilia.movimentacao_estoque me
-            ON me.pk_chave = ime."fk_movimentacao_estoque$movimentacao_estoque"
-        JOIN marilia.pedido_venda pv
+            COUNT(DISTINCT me.pk_chave) AS qtd_pedidos
+        FROM marilia.relatorio_vendas_por_vendedor(:data_inicio, :data_fim) AS rel
+        LEFT JOIN cadastros.pessoas p ON p.nome = rel.nome_vendedor
+        LEFT JOIN marilia.movimentacao_estoque me
+            ON me."fk_tipos_movimentacao$tipo_movimento" = :tipo_venda
+            AND me.data BETWEEN :data_inicio AND :data_fim
+        LEFT JOIN marilia.pedido_venda pv
             ON pv."fk_movimentacao_estoque$movimentacao_estoque" = me.pk_chave
-        LEFT JOIN marilia.itens_movimentacao_estoque_pedido_venda impv
-            ON impv."fk_itens_movimentacao_estoque$item_movimentacao" = ime.pk_chave
-        JOIN cadastros.pessoas p
-            ON p.chave = COALESCE(impv."fk_pessoas$vendedor", pv."fk_pessoas$vendedor")
-        WHERE me."fk_tipos_movimentacao$tipo_movimento" = :tipo_venda
-          AND me.data BETWEEN :data_inicio AND :data_fim
-        GROUP BY p.chave, p.nome
-        ORDER BY total_vendas DESC
+            AND pv."fk_pessoas$vendedor" = p.chave
+        GROUP BY rel.nome_vendedor, rel.vr_total_vendas, rel.vr_total_devolucoes, p.chave
+        ORDER BY rel.vr_total_vendas DESC
         LIMIT 10
     """)
-
-    params = {"tipo_venda": TIPO_VENDA, "data_inicio": data_inicio, "data_fim": data_fim}
-    params_hoje = {"tipo_venda": TIPO_VENDA, "hoje": hoje}
+    params = {
+        "tipo_venda": TIPO_VENDA,
+        "data_inicio": data_inicio,
+        "data_fim": data_fim,
+    }
 
     r_periodo = (await db.execute(sql_dashboard, params)).one()
-    r_hoje = (await db.execute(sql_hoje, params_hoje)).one()
+    r_hoje = (await db.execute(sql_hoje, {"tipo_venda": TIPO_VENDA, "hoje": hoje})).one()
     r_ranking = (await db.execute(sql_ranking, params)).all()
 
     qtd = int(r_periodo.qtd_pedidos or 0)
@@ -173,19 +138,20 @@ async def get_dashboard(
     qtd_hoje = int(r_hoje.qtd_pedidos or 0)
     total_hoje = Decimal(str(r_hoje.total_vendas or 0))
 
-    ranking = [
-        {
-            "vendedor_id": row.vendedor_id,
-            "vendedor_nome": row.vendedor_nome or "—",
-            "total_vendas": Decimal(str(row.total_vendas or 0)),
-            "quantidade_pedidos": int(row.qtd_pedidos or 0),
-            "ticket_medio": (
-                Decimal(str(row.total_vendas or 0)) / int(row.qtd_pedidos)
-                if row.qtd_pedidos else Decimal("0")
-            ),
-        }
-        for row in r_ranking
-    ]
+    ranking = []
+    for row in r_ranking:
+        total_vendas = Decimal(str(row.vr_total_vendas or 0))
+        total_dev = Decimal(str(row.vr_total_devolucoes or 0))
+        # ✅ total líquido = vendas - devoluções (igual ao ERP)
+        total_liquido = total_vendas - total_dev
+        qtd_ped = int(row.qtd_pedidos or 0)
+        ranking.append({
+            "vendedor_id": row.vendedor_id or 0,
+            "vendedor_nome": row.nome_vendedor or "—",
+            "total_vendas": total_liquido,
+            "quantidade_pedidos": qtd_ped,
+            "ticket_medio": (total_liquido / qtd_ped) if qtd_ped > 0 else Decimal("0"),
+        })
 
     return {
         "total_vendas": total,
@@ -207,7 +173,7 @@ async def listar_pedidos_venda(
     data_fim: date,
     vendedor_id: int | None = None,
     cliente_id: int | None = None,
-    limit: int = 100,
+    limit: int = 500,
     offset: int = 0,
 ) -> list[dict]:
 
@@ -224,14 +190,13 @@ async def listar_pedidos_venda(
     }
 
     if vendedor_id:
-        # MUDANÇA: Filtro OR para buscar vendedor no cabeçalho OU nos itens
         conditions.append("""(
-            pv."fk_pessoas$vendedor" = :vendedor_id 
+            pv."fk_pessoas$vendedor" = :vendedor_id
             OR EXISTS (
-                SELECT 1 
+                SELECT 1
                 FROM marilia.itens_movimentacao_estoque_pedido_venda impv
                 WHERE impv."fk_itens_movimentacao_estoque$item_movimentacao" IN (
-                    SELECT ime.pk_chave 
+                    SELECT ime.pk_chave
                     FROM marilia.itens_movimentacao_estoque ime
                     WHERE ime."fk_movimentacao_estoque$movimentacao_estoque" = me.pk_chave
                 )
@@ -345,8 +310,10 @@ async def get_pedido_venda_detalhe(db: AsyncSession, pedido_id: int) -> dict:
         return None
 
     vendedor_cabecalho_id = cab.vendedor_id
-
-    itens_rows = (await db.execute(sql_itens, {"pedido_id": pedido_id, "vendedor_cabecalho_id": vendedor_cabecalho_id})).all()
+    itens_rows = (await db.execute(sql_itens, {
+        "pedido_id": pedido_id,
+        "vendedor_cabecalho_id": vendedor_cabecalho_id,
+    })).all()
 
     itens = [
         {
@@ -391,7 +358,7 @@ async def listar_pre_vendas(
     vendedor_id: int | None = None,
     cliente_id: int | None = None,
     efetivada: bool | None = None,
-    limit: int = 100,
+    limit: int = 500,
     offset: int = 0,
 ) -> list[dict]:
 
@@ -405,14 +372,13 @@ async def listar_pre_vendas(
         conditions.append("me.data <= :data_fim")
         params["data_fim"] = data_fim
     if vendedor_id:
-        # MUDANÇA: Filtro OR para buscar vendedor no cabeçalho OU nos itens
         conditions.append("""(
-            pv."fk_pessoas$vendedor" = :vendedor_id 
+            pv."fk_pessoas$vendedor" = :vendedor_id
             OR EXISTS (
-                SELECT 1 
+                SELECT 1
                 FROM marilia.itens_movimentacao_estoque_pre_venda impv
                 WHERE impv."fk_itens_movimentacao_estoque$item_movimentacao" IN (
-                    SELECT ime.pk_chave 
+                    SELECT ime.pk_chave
                     FROM marilia.itens_movimentacao_estoque ime
                     WHERE ime."fk_movimentacao_estoque$movimentacao_estoque" = me.pk_chave
                 )
@@ -534,8 +500,10 @@ async def get_pre_venda_detalhe(db: AsyncSession, pre_venda_id: int) -> dict | N
         return None
 
     vendedor_cabecalho_id = cab.vendedor_id
-
-    itens_rows = (await db.execute(sql_itens, {"id": pre_venda_id, "vendedor_cabecalho_id": vendedor_cabecalho_id})).all()
+    itens_rows = (await db.execute(sql_itens, {
+        "id": pre_venda_id,
+        "vendedor_cabecalho_id": vendedor_cabecalho_id,
+    })).all()
 
     itens = [
         {
