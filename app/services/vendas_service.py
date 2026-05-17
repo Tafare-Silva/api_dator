@@ -107,7 +107,14 @@ async def get_dashboard(
             rel.nome_vendedor,
             rel.vr_total_vendas,
             rel.vr_total_devolucoes,
-            p.chave AS vendedor_id,
+            (
+                SELECT p.chave
+                FROM cadastros.pessoas p
+                WHERE p.nome = rel.nome_vendedor
+                AND p.chave > 0
+                ORDER BY p.chave DESC
+                LIMIT 1
+            ) AS vendedor_id,
             (
                 SELECT COUNT(DISTINCT pv2."fk_movimentacao_estoque$movimentacao_estoque")
                 FROM marilia.pedido_venda pv2
@@ -115,13 +122,17 @@ async def get_dashboard(
                     ON me2.pk_chave = pv2."fk_movimentacao_estoque$movimentacao_estoque"
                 WHERE me2."fk_tipos_movimentacao$tipo_movimento" = :tipo_venda
                 AND me2.data BETWEEN :data_inicio AND :data_fim
-                AND pv2."fk_pessoas$vendedor" = p.chave
+                AND pv2."fk_pessoas$vendedor" = (
+                    SELECT p2.chave FROM cadastros.pessoas p2
+                    WHERE p2.nome = rel.nome_vendedor AND p2.chave > 0
+                    ORDER BY p2.chave DESC LIMIT 1
+                )
             ) AS qtd_pedidos
         FROM marilia.relatorio_vendas_por_vendedor(:data_inicio, :data_fim) AS rel
-        LEFT JOIN cadastros.pessoas p ON p.nome = rel.nome_vendedor
         ORDER BY rel.vr_total_vendas DESC
         LIMIT 10
     """)
+
     params = {
         "tipo_venda": TIPO_VENDA,
         "data_inicio": data_inicio,
