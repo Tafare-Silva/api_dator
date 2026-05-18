@@ -146,37 +146,34 @@ async def get_vendas_por_marca(
     divisao: str | None = None,
     colecao: str | None = None,
 ) -> list[dict]:
-    params: dict = {}
-    where = _filtros_where(data_inicio, data_fim, vendedor_id, None, divisao, colecao, params)
+    # ✅ Usa função oficial do ERP para consistência
+    sql = text("""
+        SELECT rel.nome, rel.valor_venda, rel.valor_lucro, rel.lucratividade
+        FROM marilia.relatorio_vendas_por_marca(:data_inicio, :data_fim) AS rel
+        WHERE rel.valor_venda != 0
+        ORDER BY rel.valor_venda DESC
+    """)
 
-    sql = f"""
-        SELECT
-            p."fk_marcas$marca" AS marca_codigo,
-            COALESCE(NULLIF(m.nome, ''), NULLIF(p."fk_marcas$marca", ''), 'Sem marca') AS marca_nome,
-            SUM({_valor_item_sql()}) AS total_vendido,
-            SUM(ABS(ime.quantidade)) AS quantidade_vendida,
-            COUNT(DISTINCT me.pk_chave) AS quantidade_pedidos
-        {_base_joins()}
-        LEFT JOIN cadastros.marcas m ON m.nome = p."fk_marcas$marca"
-        {where}
-        GROUP BY p."fk_marcas$marca", m.nome
-        ORDER BY total_vendido DESC
-    """
+    params = {
+        "data_inicio": data_inicio or date(2000, 1, 1),
+        "data_fim": data_fim or date.today(),
+    }
 
-    result = await db.execute(text(sql), params)
+    result = await db.execute(sql, params)
     rows = result.fetchall()
-    total = sum(Decimal(str(r[2])) for r in rows if r[2] and Decimal(str(r[2])) > 0)
+    total = sum(Decimal(str(r[1])) for r in rows if r[1] and Decimal(str(r[1])) > 0)
 
     return [
         {
             "marca_codigo": r[0],
-            "marca_nome": r[1] or "Sem marca",
-            "total_vendido": Decimal(str(r[2])) if r[2] else Decimal("0"),
-            "quantidade_vendida": Decimal(str(r[3])) if r[3] else Decimal("0"),
-            "quantidade_pedidos": r[4] or 0,
-            "pct": round(float(Decimal(str(r[2])) / total * 100), 2) if total > 0 and r[2] else 0.0,
+            "marca_nome": r[0] or "Sem marca",
+            "total_vendido": Decimal(str(r[1])) if r[1] else Decimal("0"),
+            "quantidade_vendida": Decimal("0"),
+            "quantidade_pedidos": 0,
+            "pct": round(float(Decimal(str(r[1])) / total * 100), 2) if total > 0 and r[1] and Decimal(str(r[1])) > 0 else 0.0,
         }
         for r in rows
+        if r[1] and Decimal(str(r[1])) > 0  # filtra marcas com venda positiva
     ]
 
 
@@ -188,37 +185,35 @@ async def get_vendas_por_divisao(
     marca: str | None = None,
     colecao: str | None = None,
 ) -> list[dict]:
-    params: dict = {}
-    where = _filtros_where(data_inicio, data_fim, vendedor_id, marca, None, colecao, params)
+    # ✅ Usa função oficial do ERP — passa '' para trazer todas as divisões
+    sql = text("""
+        SELECT rel.nome, rel.valor_venda, rel.valor_lucro, rel.lucratividade, rel.quantidade
+        FROM marilia.relatorio_vendas_por_divisao(:data_inicio, :data_fim, :divisao) AS rel
+        WHERE rel.valor_venda != 0
+        ORDER BY rel.valor_venda DESC
+    """)
 
-    sql = f"""
-        SELECT
-            p."fk_divisoes$divisao" AS divisao_codigo,
-            COALESCE(NULLIF(d.nome, ''), NULLIF(p."fk_divisoes$divisao", ''), 'Sem divisão') AS divisao_nome,
-            SUM({_valor_item_sql()}) AS total_vendido,
-            SUM(ABS(ime.quantidade)) AS quantidade_vendida,
-            COUNT(DISTINCT me.pk_chave) AS quantidade_pedidos
-        {_base_joins()}
-        LEFT JOIN cadastros.divisoes d ON d.codigo = p."fk_divisoes$divisao"
-        {where}
-        GROUP BY p."fk_divisoes$divisao", d.nome
-        ORDER BY total_vendido DESC
-    """
+    params = {
+        "data_inicio": data_inicio or date(2000, 1, 1),
+        "data_fim": data_fim or date.today(),
+        "divisao": "",  # '' = todas as divisões
+    }
 
-    result = await db.execute(text(sql), params)
+    result = await db.execute(sql, params)
     rows = result.fetchall()
-    total = sum(Decimal(str(r[2])) for r in rows if r[2] and Decimal(str(r[2])) > 0)
+    total = sum(Decimal(str(r[1])) for r in rows if r[1] and Decimal(str(r[1])) > 0)
 
     return [
         {
             "divisao_codigo": r[0],
-            "divisao_nome": r[1] or "Sem divisão",
-            "total_vendido": Decimal(str(r[2])) if r[2] else Decimal("0"),
-            "quantidade_vendida": Decimal(str(r[3])) if r[3] else Decimal("0"),
-            "quantidade_pedidos": r[4] or 0,
-            "pct": round(float(Decimal(str(r[2])) / total * 100), 2) if total > 0 and r[2] else 0.0,
+            "divisao_nome": r[0] or "Sem divisão",
+            "total_vendido": Decimal(str(r[1])) if r[1] else Decimal("0"),
+            "quantidade_vendida": Decimal(str(r[4])) if len(r) > 4 and r[4] else Decimal("0"),
+            "quantidade_pedidos": 0,
+            "pct": round(float(Decimal(str(r[1])) / total * 100), 2) if total > 0 and r[1] and Decimal(str(r[1])) > 0 else 0.0,
         }
         for r in rows
+        if r[1] and Decimal(str(r[1])) > 0
     ]
 
 
