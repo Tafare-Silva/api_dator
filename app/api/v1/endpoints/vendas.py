@@ -1,10 +1,14 @@
 from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.deps import get_usuario_logado
 from app.db.session import get_db
+from app.models.usuario import Usuario
+from app.schemas.vendas import PreVendaInput, PreVendaCriadaResponse
 from app.services.vendas_service import (
+    criar_pre_venda,
     get_dashboard,
     get_pedido_venda_detalhe,
     get_pre_venda_detalhe,
@@ -119,3 +123,17 @@ async def get_pre_venda_detalhe_endpoint(
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail=f"Pré-venda {pre_venda_id} não encontrada.")
     return pv
+
+
+@router.post(
+    "/pre-vendas",
+    summary="Cria uma nova pré-venda",
+    response_model=PreVendaCriadaResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def criar_pre_venda_endpoint(
+    dados: PreVendaInput,
+    db: AsyncSession = Depends(get_db),
+    usuario: Usuario = Depends(get_usuario_logado),
+):
+    return await criar_pre_venda(db, dados, usuario.usuario_login)

@@ -17,6 +17,7 @@ from app.models.vendas import (
     PedidoVenda,
     PreVenda,
 )
+from app.schemas.vendas import PreVendaInput
 
 TIPO_VENDA = "VENDA DE MERCADORIA"
 TIPO_PRE_VENDA = "PRE-VENDA"
@@ -550,4 +551,133 @@ async def get_pre_venda_detalhe(db: AsyncSession, pre_venda_id: int) -> dict | N
         "vr_total": vr_total,
         "quantidade_itens": len(itens),
         "itens": itens,
+    }
+
+
+# ── Criação de Pré-Venda ──────────────────────────────────────────────────────
+
+async def _obter_local_estoque_padrao(db: AsyncSession) -> str:
+    """Obtém o local de estoque mais usado em pré-vendas existentes."""
+    result = await db.execute(text("""
+        SELECT ime."fk_local_estoque$local"
+        FROM marilia.itens_movimentacao_estoque ime
+        JOIN marilia.pre_venda pv
+            ON pv."fk_movimentacao_estoque$movimentacao_estoque" = ime."fk_movimentacao_estoque$movimentacao_estoque"
+        GROUP BY ime."fk_local_estoque$local"
+        ORDER BY COUNT(*) DESC
+        LIMIT 1
+    """))
+    row = result.one_or_none()
+    return row[0] if row else "PRINCIPAL"
+
+
+async def criar_pre_venda(
+    db: AsyncSession,
+    dados: PreVendaInput,
+    usuario_login: str,
+) -> dict:
+    from datetime import date as date_cls
+
+    data_pv = dados.data or date_cls.today()
+    local_estoque = await _obter_local_estoque_padrao(db)
+
+    # 1. Busca nome do cliente
+    cliente_nome: str | None = None
+    if dados.cliente_id:
+        r = await db.execute(
+            text("SELECT nome FROM cadastros.pessoas WHERE chave = :chave"),
+            {"chave": dados.cliente_id},
+        )
+        row = r.one_or_none()
+        cliente_nome = row[0] if row else None
+
+    # 2. Insere movimentacao_estoque
+    r_mov = await db.execute(
+        text("""
+            INSERT INTO marilia.movimentacao_estoque
+                (data, "fk_pessoas$pessoa", "fk_tipos_movimentacao$tipo_movimento", obs, usuario, cliente)
+            VALUES
+                (:data, :cliente_id, :tipo, :obs, :usuario, :cliente_nome)
+            RETURNING pk_chave
+        """),
+        {
+            "data": data_pv,
+            "cliente_id": dados.cliente_id,
+            "tipo": TIPO_PRE_VENDA,
+            "obs": f"APLICATIVO{' - ' + dados.obs if dados.obs else ''}",
+            "usuario": usuario_login,
+            "cliente_nome": cliente_nome,
+        },
+    )
+    mov_pk = r_mov.scalar_one()
+
+    # 3. Insere pre_venda
+    await db.execute(
+        text("""
+            INSERT INTO marilia.pre_venda
+                ("fk_movimentacao_estoque$movimentacao_estoque", "fk_pessoas$vendedor",
+                 efetivada, condicao_pagamento, data_entrega)
+            VALUES (:mov_pk, :vendedor_id, false, :condicao, :data_entrega)
+        """),
+        {
+            "mov_pk": mov_pk,
+            "vendedor_id": dados.vendedor_id,
+            "condicao": dados.condicao_pagamento,
+            "data_entrega": dados.data_entrega,
+        },
+    )
+
+    # 4. Insere os itens
+    vr_total = Decimal("0")
+    for item in dados.itens:
+        r_item = await db.execute(
+            text("""
+                INSERT INTO marilia.itens_movimentacao_estoque
+                    ("fk_movimentacao_estoque$movimentacao_estoque", "fk_produtos$produto",
+                     quantidade, "fk_local_estoque$local",
+                     vr_desconto_total, vr_unitario_bruto, vr_acrescimo_total, vr_comissao)
+                VALUES
+                    (:mov_pk, :produto_id, :quantidade, :local_estoque,
+                     :desconto, :unitario, :acrescimo, 0)
+                RETURNING pk_chave
+            """),
+            {
+                "mov_pk": mov_pk,
+                "produto_id": item.produto_id,
+                "quantidade": -abs(item.quantidade),  # saída: negativo
+                "local_estoque": local_estoque,
+                "desconto": item.vr_desconto_total,
+                "unitario": item.vr_unitario_bruto,
+                "acrescimo": item.vr_acrescimo_total,
+            },
+        )
+        item_pk = r_item.scalar_one()
+
+        # Vendedor do item: usa o do item se informado, senão usa o do cabeçalho
+        vendedor_item = item.vendedor_id if item.vendedor_id is not None else dados.vendedor_id
+
+        await db.execute(
+            text("""
+                INSERT INTO marilia.itens_movimentacao_estoque_pre_venda
+                    ("fk_itens_movimentacao_estoque$item_movimentacao",
+                     "fk_pessoas$vendedor", quantidade_devolvida, item_devolvido)
+                VALUES (:item_pk, :vendedor_id, 0, false)
+            """),
+            {"item_pk": item_pk, "vendedor_id": vendedor_item},
+        )
+
+        vr_total += item.quantidade * item.vr_unitario_bruto - item.vr_desconto_total + item.vr_acrescimo_total
+
+    await db.commit()
+
+    # 5. Retorna resumo da pré-venda criada
+    return {
+        "pk_chave": mov_pk,
+        "data": data_pv,
+        "cliente_id": dados.cliente_id,
+        "cliente_nome": cliente_nome,
+        "vendedor_id": dados.vendedor_id,
+        "vendedor_nome": None,
+        "vr_total": vr_total,
+        "quantidade_itens": len(dados.itens),
     }

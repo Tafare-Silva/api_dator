@@ -50,3 +50,16 @@ async def get_usuario_logado(
         )
 
     return usuario
+
+
+async def get_admin(
+    usuario: Usuario = Depends(get_usuario_logado),
+) -> Usuario:
+    """Dependency que exige grupo ADMINISTRADORES."""
+    grupo = (usuario.fk_grupo_usuario_grupo_usuario or "").upper()
+    if "ADMINISTRADOR" not in grupo:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Acesso restrito a administradores.",
+        )
+    return usuario

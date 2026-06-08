@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
 # ── Vendedor ──────────────────────────────────────────────────────────────────
@@ -126,3 +126,56 @@ class VendasPorVendedor(BaseModel):
     quantidade_pedidos: int
     ticket_medio: Decimal
     pedidos: list[PedidoVendaResumo]
+
+
+# ── Criação de Pré-Venda ──────────────────────────────────────────────────────
+
+class ItemPreVendaInput(BaseModel):
+    produto_id: int
+    quantidade: Decimal
+    vr_unitario_bruto: Decimal
+    vr_desconto_total: Decimal = Decimal("0")
+    vr_acrescimo_total: Decimal = Decimal("0")
+    vendedor_id: int | None = None
+
+    @field_validator("quantidade")
+    @classmethod
+    def quantidade_positiva(cls, v: Decimal) -> Decimal:
+        if v <= 0:
+            raise ValueError("Quantidade deve ser maior que zero")
+        return v
+
+    @field_validator("vr_unitario_bruto")
+    @classmethod
+    def preco_positivo(cls, v: Decimal) -> Decimal:
+        if v < 0:
+            raise ValueError("Preço unitário não pode ser negativo")
+        return v
+
+
+class PreVendaInput(BaseModel):
+    cliente_id: int | None = None
+    vendedor_id: int | None = None
+    data: date | None = None
+    condicao_pagamento: str | None = None
+    data_entrega: date | None = None
+    obs: str | None = None
+    itens: list[ItemPreVendaInput]
+
+    @field_validator("itens")
+    @classmethod
+    def deve_ter_itens(cls, v: list) -> list:
+        if not v:
+            raise ValueError("A pré-venda deve ter pelo menos um item")
+        return v
+
+
+class PreVendaCriadaResponse(BaseModel):
+    pk_chave: int
+    data: date
+    cliente_id: int | None = None
+    cliente_nome: str | None = None
+    vendedor_id: int | None = None
+    vendedor_nome: str | None = None
+    vr_total: Decimal
+    quantidade_itens: int
