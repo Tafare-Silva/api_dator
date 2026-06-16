@@ -1,6 +1,5 @@
 """
-Serviço financeiro — contas a pagar / pagas.
-Pago = existe registro em marilia.titulos_baixa.
+Serviço financeiro — contas a pagar (P) e contas a receber (R).
 """
 from datetime import date
 from decimal import Decimal
@@ -13,6 +12,7 @@ SITUACAO_PENDENTES = "NORMAL"
 
 
 def _build_conditions(
+    tipo_titulo: str,  # 'P' ou 'R'
     data_inicio: date | None,
     data_fim: date | None,
     data_baixa_inicio: date | None,
@@ -24,7 +24,7 @@ def _build_conditions(
     params: dict,
 ) -> list[str]:
     conditions = [
-        "t.tipo_titulo = 'P'",
+        f"t.tipo_titulo = '{tipo_titulo}'",
         "t.e_haver = false",
         "t.e_cartao = false",
         # Sempre oculta títulos renegociados (como no ERP)
@@ -67,8 +67,9 @@ def _build_conditions(
     return conditions
 
 
-async def listar_contas_pagar(
+async def listar_financeiro(
     db: AsyncSession,
+    tipo_titulo: str,
     data_inicio: date | None = None,
     data_fim: date | None = None,
     data_baixa_inicio: date | None = None,
@@ -82,14 +83,12 @@ async def listar_contas_pagar(
 ) -> list[dict]:
     params: dict = {"limit": limit, "offset": offset}
     conditions = _build_conditions(
-        data_inicio, data_fim, data_baixa_inicio, data_baixa_fim,
+        tipo_titulo, data_inicio, data_fim, data_baixa_inicio, data_baixa_fim,
         pessoa_id, plano_contas_id, centro_custos_id, situacao, params,
     )
     where = " AND ".join(conditions)
     hoje = date.today()
 
-    # Usamos GROUP BY para evitar duplicação se houver múltiplas baixas
-    # Usamos COUNT(*) para verificar se há baixas, já que pk_chave pode não existir na tabela marilia.titulos_baixa
     sql = text(f"""
         SELECT
             t.pk_chave,
@@ -102,6 +101,7 @@ async def listar_contas_pagar(
             t."fk_tipo_pagamento$nome"              AS tipo_pagamento,
             t.fk_pessoas__pessoa                    AS pessoa_id,
             p.nome                                  AS pessoa_nome,
+            p.celular_principal                     AS pessoa_celular,
             t.fk_plano_contas__plano_contas         AS plano_contas_id,
             pc.nome                                 AS plano_contas_nome,
             t.fk_centro_custos__centro_custos       AS centro_custos_id,
@@ -114,7 +114,6 @@ async def listar_contas_pagar(
             SUM(COALESCE(tb.adicional, 0))           AS adicional,
             SUM(COALESCE(tb.desconto, 0))            AS desconto
         FROM marilia.titulos t
-        LEFT JOIN marilia.contas_pagar cp ON cp."fk_titulos$titulo" = t.pk_chave       
         LEFT JOIN cadastros.pessoas p ON p.chave = t.fk_pessoas__pessoa
         LEFT JOIN cadastros.plano_contas pc ON pc.chave = t.fk_plano_contas__plano_contas
         LEFT JOIN cadastros.centro_custos cc ON cc.chave = t.fk_centro_custos__centro_custos
@@ -124,7 +123,7 @@ async def listar_contas_pagar(
         GROUP BY 
             t.pk_chave, t.data_vencimento, t.data_operacao, t.valor, t.documento, 
             t.parcela, t.observacoes, t."fk_tipo_pagamento$nome", t.fk_pessoas__pessoa, 
-            p.nome, t.fk_plano_contas__plano_contas, pc.nome, 
+            p.nome, p.celular_principal, t.fk_plano_contas__plano_contas, pc.nome, 
             t.fk_centro_custos__centro_custos, cc.nome
         ORDER BY t.data_vencimento ASC, t.pk_chave ASC
         LIMIT :limit OFFSET :offset
@@ -160,6 +159,7 @@ async def listar_contas_pagar(
             "vencido": not pago and r.data_vencimento < hoje,
             "pessoa_id": r.pessoa_id,
             "pessoa_nome": r.pessoa_nome,
+            "pessoa_celular": r.pessoa_celular,
             "plano_contas_id": r.plano_contas_id,
             "plano_contas_nome": r.plano_contas_nome,
             "centro_custos_id": r.centro_custos_id,
@@ -168,8 +168,9 @@ async def listar_contas_pagar(
     return result
 
 
-async def resumo_contas_pagar(
+async def resumo_financeiro(
     db: AsyncSession,
+    tipo_titulo: str,
     data_inicio: date | None,
     data_fim: date | None,
     data_baixa_inicio: date | None,
@@ -182,7 +183,7 @@ async def resumo_contas_pagar(
     hoje = date.today()
     params: dict = {"hoje": hoje}
     base_conditions = _build_conditions(
-        data_inicio, data_fim, data_baixa_inicio, data_baixa_fim,
+        tipo_titulo, data_inicio, data_fim, data_baixa_inicio, data_baixa_fim,
         pessoa_id, plano_contas_id, centro_custos_id, situacao, params,
     )
     where = " AND ".join(base_conditions)
@@ -243,12 +244,12 @@ async def resumo_contas_pagar(
     }
 
 
-async def listar_fornecedores(db: AsyncSession) -> list[dict]:
-    sql = text("""
+async def listar_pessoas_financeiro(db: AsyncSession, tipo_titulo: str) -> list[dict]:
+    sql = text(f"""
         SELECT DISTINCT p.chave, p.nome
         FROM cadastros.pessoas p
         JOIN marilia.titulos t ON t.fk_pessoas__pessoa = p.chave
-        WHERE t.tipo_titulo = 'P' AND p.inativo = false
+        WHERE t.tipo_titulo = '{tipo_titulo}' AND p.inativo = false
         ORDER BY p.nome
     """)
     rows = (await db.execute(sql)).all()
