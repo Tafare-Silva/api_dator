@@ -3,6 +3,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.deps import get_admin
 from app.db.session import get_db
 from app.services.financeiro_service import (
     listar_centros_custos,
@@ -15,7 +16,7 @@ from app.services.financeiro_service import (
 router = APIRouter(prefix="/financeiro", tags=["Financeiro"])
 
 
-# --- Contas a PAGAR ---
+# --- Contas a PAGAR (somente administradores) ---
 
 @router.get("/contas-pagar", summary="Lista contas a pagar (P)")
 async def get_contas_pagar(
@@ -30,6 +31,7 @@ async def get_contas_pagar(
     limit: int = Query(default=500, le=2000),
     offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
+    _admin=Depends(get_admin),
 ):
     return await listar_financeiro(
         db, tipo_titulo='P',
@@ -52,6 +54,7 @@ async def get_resumo_contas_pagar(
     centro_custos_id: int | None = Query(default=None),
     situacao: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
+    _admin=Depends(get_admin),
 ):
     return await resumo_financeiro(
         db, tipo_titulo='P',
@@ -62,7 +65,7 @@ async def get_resumo_contas_pagar(
     )
 
 
-# --- Contas a RECEBER ---
+# --- Contas a RECEBER (qualquer usuário autenticado: vendedores, caixas, admins) ---
 
 @router.get("/contas-receber", summary="Lista contas a receber (R)")
 async def get_contas_receber(
@@ -112,7 +115,7 @@ async def get_resumo_contas_receber(
 # --- Auxiliares ---
 
 @router.get("/fornecedores")
-async def get_fornecedores(db: AsyncSession = Depends(get_db)):
+async def get_fornecedores(db: AsyncSession = Depends(get_db), _admin=Depends(get_admin)):
     return await listar_pessoas_financeiro(db, tipo_titulo='P')
 
 

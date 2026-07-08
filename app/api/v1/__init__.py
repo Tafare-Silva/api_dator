@@ -1,4 +1,4 @@
-from app.api.v1.endpoints import auth, clientes, financeiro, impressao, itens_mesa, mesas, produtos, vendas, estatisticas
+from app.api.v1.endpoints import auth, clientes, financeiro, impressao, itens_mesa, mesas, produtos, vendas, estatisticas, apuracao
 
 from fastapi import APIRouter, Depends
 
@@ -16,5 +16,6 @@ api_router.include_router(produtos.router, dependencies=[autenticado])
 api_router.include_router(impressao.router, dependencies=[autenticado])
 api_router.include_router(vendas.router, dependencies=[autenticado])
 api_router.include_router(clientes.router, dependencies=[autenticado])
-api_router.include_router(financeiro.router, dependencies=[apenas_admin])
+api_router.include_router(financeiro.router, dependencies=[autenticado])
+api_router.include_router(apuracao.router, dependencies=[apenas_admin])
 api_router.include_router(estatisticas.router, dependencies=[autenticado])
