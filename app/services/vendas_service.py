@@ -9,6 +9,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.exceptions import BusinessRuleError
 from app.models.vendas import (
     Funcionario,
     ItemMovimentacaoEstoque,
@@ -557,7 +558,15 @@ async def get_pre_venda_detalhe(db: AsyncSession, pre_venda_id: int) -> dict | N
 # ── Criação de Pré-Venda ──────────────────────────────────────────────────────
 
 async def _obter_local_estoque_padrao(db: AsyncSession) -> str:
-    """Obtém o local de estoque mais usado em pré-vendas existentes."""
+    """Obtém o local de estoque mais usado em pré-vendas existentes.
+
+    Se não houver nenhuma pré-venda anterior para basear a busca, cai para um
+    valor real cadastrado em `cadastros.local_estoque` (preferindo "LOJA",
+    que é o local padrão mais comum) — nunca para uma string fixa que pode
+    não existir na tabela, o que violaria a FK de
+    `itens_movimentacao_estoque."fk_local_estoque$local"` e derrubaria a
+    criação da pré-venda com um erro 500.
+    """
     result = await db.execute(text("""
         SELECT ime."fk_local_estoque$local"
         FROM marilia.itens_movimentacao_estoque ime
@@ -568,7 +577,18 @@ async def _obter_local_estoque_padrao(db: AsyncSession) -> str:
         LIMIT 1
     """))
     row = result.one_or_none()
-    return row[0] if row else "PRINCIPAL"
+    if row:
+        return row[0]
+
+    fallback = await db.execute(text("""
+        SELECT nome FROM cadastros.local_estoque
+        ORDER BY (nome = 'LOJA') DESC, nome
+        LIMIT 1
+    """))
+    fallback_row = fallback.one_or_none()
+    if not fallback_row:
+        raise BusinessRuleError("Nenhum local de estoque cadastrado — não é possível criar a pré-venda.")
+    return fallback_row[0]
 
 
 async def criar_pre_venda(

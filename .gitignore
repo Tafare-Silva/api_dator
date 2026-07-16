@@ -16,6 +16,9 @@ dist/
 build/
 *.egg-info/
 
+# Build web do Flutter (restaurante_app), copiado aqui só no deploy
+web_build/
+
 # IDEs
 .vscode/
 .idea/

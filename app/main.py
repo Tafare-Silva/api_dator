@@ -1,6 +1,9 @@
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
+from fastapi.staticfiles import StaticFiles
 
 from app.api.v1 import api_router
 from app.core.config import settings
@@ -33,6 +36,15 @@ app.include_router(api_router, prefix=settings.API_V1_STR)
 @app.get("/health", tags=["Health"])
 async def health_check():
     return {"status": "ok", "project": settings.PROJECT_NAME}
+
+
+# Build web do app Flutter (gerado com `flutter build web`, copiado para cá no deploy).
+# Montado por último e na raiz para que as rotas de API acima continuem tendo prioridade;
+# StaticFiles(html=True) serve index.html tanto em "/" quanto em rotas desconhecidas,
+# necessário para o roteamento client-side do Flutter web funcionar.
+_WEB_BUILD_DIR = os.path.join(os.path.dirname(__file__), "..", "web_build")
+if os.path.isdir(_WEB_BUILD_DIR):
+    app.mount("/", StaticFiles(directory=_WEB_BUILD_DIR, html=True), name="web")
 
 
 # Configura o Swagger para mostrar o campo Bearer token no botão Authorize
