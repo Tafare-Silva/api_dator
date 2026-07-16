@@ -612,23 +612,30 @@ async def criar_pre_venda(
         cliente_nome = row[0] if row else None
 
     # 2. Insere movimentacao_estoque
-    # Nota: a coluna "usuario" não existe em todos os bancos de clientes (schema
-    # do ERP Delphi varia por instalação) — por isso o usuário que criou a
-    # pré-venda vai só na observação, nunca numa coluna dedicada.
+    # Nota: as colunas "usuario" e "cliente" não existem em todos os bancos de
+    # clientes (schema do ERP Delphi varia por instalação) — por isso o usuário
+    # que criou a pré-venda e o nome do cliente vão só na observação, nunca em
+    # colunas dedicadas. O cliente_id em si continua salvo via
+    # "fk_pessoas$pessoa", que é uma coluna universal.
+    obs_partes = [f"APLICATIVO ({usuario_login})"]
+    if cliente_nome:
+        obs_partes.append(f"Cliente: {cliente_nome}")
+    if dados.obs:
+        obs_partes.append(dados.obs)
+
     r_mov = await db.execute(
         text("""
             INSERT INTO marilia.movimentacao_estoque
-                (data, "fk_pessoas$pessoa", "fk_tipos_movimentacao$tipo_movimento", obs, cliente)
+                (data, "fk_pessoas$pessoa", "fk_tipos_movimentacao$tipo_movimento", obs)
             VALUES
-                (:data, :cliente_id, :tipo, :obs, :cliente_nome)
+                (:data, :cliente_id, :tipo, :obs)
             RETURNING pk_chave
         """),
         {
             "data": data_pv,
             "cliente_id": dados.cliente_id,
             "tipo": TIPO_PRE_VENDA,
-            "obs": f"APLICATIVO ({usuario_login}){' - ' + dados.obs if dados.obs else ''}",
-            "cliente_nome": cliente_nome,
+            "obs": " - ".join(obs_partes),
         },
     )
     mov_pk = r_mov.scalar_one()
