@@ -104,19 +104,16 @@ async def get_dashboard(
     """)
 
     # ✅ RANKING usa a função oficial do ERP para garantir consistência com o ERP
+    # LEFT JOIN LATERAL resolve o vendedor (chave + secao) uma única vez por
+    # linha, reaproveitado também na subquery de contagem de pedidos — evita
+    # repetir o mesmo lookup por nome 3x como antes.
     sql_ranking = text("""
         SELECT
             rel.nome_vendedor,
             rel.vr_total_vendas,
             rel.vr_total_devolucoes,
-            (
-                SELECT p.chave
-                FROM cadastros.pessoas p
-                WHERE p.nome = rel.nome_vendedor
-                AND p.chave > 0
-                ORDER BY p.chave DESC
-                LIMIT 1
-            ) AS vendedor_id,
+            pess.chave AS vendedor_id,
+            pess.secao,
             (
                 SELECT COUNT(DISTINCT pv2."fk_movimentacao_estoque$movimentacao_estoque")
                 FROM marilia.pedido_venda pv2
@@ -124,15 +121,18 @@ async def get_dashboard(
                     ON me2.pk_chave = pv2."fk_movimentacao_estoque$movimentacao_estoque"
                 WHERE me2."fk_tipos_movimentacao$tipo_movimento" = :tipo_venda
                 AND me2.data BETWEEN :data_inicio AND :data_fim
-                AND pv2."fk_pessoas$vendedor" = (
-                    SELECT p2.chave FROM cadastros.pessoas p2
-                    WHERE p2.nome = rel.nome_vendedor AND p2.chave > 0
-                    ORDER BY p2.chave DESC LIMIT 1
-                )
+                AND pv2."fk_pessoas$vendedor" = pess.chave
             ) AS qtd_pedidos
         FROM marilia.relatorio_vendas_por_vendedor(:data_inicio, :data_fim) AS rel
+        LEFT JOIN LATERAL (
+            SELECT p.chave, p.secao
+            FROM cadastros.pessoas p
+            WHERE p.nome = rel.nome_vendedor AND p.chave > 0
+            ORDER BY p.chave DESC
+            LIMIT 1
+        ) pess ON true
         ORDER BY rel.vr_total_vendas DESC
-        LIMIT 10
+        LIMIT 100
     """)
 
     params = {
@@ -162,10 +162,31 @@ async def get_dashboard(
         ranking.append({
             "vendedor_id": row.vendedor_id or 0,
             "vendedor_nome": row.nome_vendedor or "—",
+            "secao": row.secao,
             "total_vendas": total_liquido,
             "quantidade_pedidos": qtd_ped,
             "ticket_medio": (total_liquido / qtd_ped) if qtd_ped > 0 else Decimal("0"),
         })
+
+    # Agrupa o ranking por seção (cadastros.pessoas.secao) — vendedores sem
+    # seção definida caem em "Sem Seção" em vez de serem descartados.
+    secoes_map: dict[str, list[dict]] = {}
+    for item in ranking:
+        chave_secao = item["secao"] or "Sem Seção"
+        secoes_map.setdefault(chave_secao, []).append(item)
+
+    secoes = []
+    for nome_secao, itens in secoes_map.items():
+        total_secao = sum((i["total_vendas"] for i in itens), Decimal("0"))
+        qtd_secao = sum(i["quantidade_pedidos"] for i in itens)
+        secoes.append({
+            "secao": nome_secao,
+            "total_vendas": total_secao,
+            "quantidade_pedidos": qtd_secao,
+            "ticket_medio": (total_secao / qtd_secao) if qtd_secao > 0 else Decimal("0"),
+            "ranking_vendedores": sorted(itens, key=lambda i: i["total_vendas"], reverse=True),
+        })
+    secoes.sort(key=lambda s: s["total_vendas"], reverse=True)
 
     return {
         "total_vendas": total,
@@ -174,6 +195,7 @@ async def get_dashboard(
         "total_vendas_hoje": total_hoje,
         "quantidade_pedidos_hoje": qtd_hoje,
         "ranking_vendedores": ranking,
+        "secoes": secoes,
         "data_inicio": data_inicio,
         "data_fim": data_fim,
     }
