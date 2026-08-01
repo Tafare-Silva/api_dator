@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.deps import get_usuario_logado
 from app.db.session import get_db
 from app.models.usuario import Usuario
-from app.schemas.vendas import PreVendaInput, PreVendaCriadaResponse
+from app.schemas.vendas import ItemPreVendaInput, PreVendaInput, PreVendaCriadaResponse
 from app.services.vendas_service import (
     criar_pre_venda,
     devolver_item_pre_venda,
@@ -16,6 +16,7 @@ from app.services.vendas_service import (
     listar_pedidos_venda,
     listar_pre_vendas,
     listar_vendedores,
+    restaurar_item_pre_venda,
 )
 
 router = APIRouter(prefix="/vendas", tags=["Vendas"])
@@ -140,14 +141,35 @@ async def criar_pre_venda_endpoint(
     return await criar_pre_venda(db, dados, usuario.usuario_login)
 
 
-@router.post(
-    "/pre-vendas/{pre_venda_id}/itens/{item_id}/devolver",
-    summary="Marca (ou desmarca) um item do condicional como devolvido",
+@router.delete(
+    "/pre-vendas/{pre_venda_id}/itens/{item_id}",
+    summary="Devolve um item do condicional (remove o item da pré-venda)",
+    status_code=status.HTTP_204_NO_CONTENT,
 )
 async def devolver_item_pre_venda_endpoint(
     pre_venda_id: int,
     item_id: int,
-    desfazer: bool = Query(default=False),
     db: AsyncSession = Depends(get_db),
 ):
-    return await devolver_item_pre_venda(db, pre_venda_id, item_id, desfazer=desfazer)
+    await devolver_item_pre_venda(db, pre_venda_id, item_id)
+
+
+@router.post(
+    "/pre-vendas/{pre_venda_id}/itens/restaurar",
+    summary="Desfaz uma devolução, recriando o item na pré-venda",
+)
+async def restaurar_item_pre_venda_endpoint(
+    pre_venda_id: int,
+    dados: ItemPreVendaInput,
+    db: AsyncSession = Depends(get_db),
+):
+    return await restaurar_item_pre_venda(
+        db,
+        pre_venda_id,
+        produto_id=dados.produto_id,
+        quantidade=dados.quantidade,
+        vr_unitario_bruto=dados.vr_unitario_bruto,
+        vr_desconto_total=dados.vr_desconto_total,
+        vr_acrescimo_total=dados.vr_acrescimo_total,
+        vendedor_id=dados.vendedor_id,
+    )

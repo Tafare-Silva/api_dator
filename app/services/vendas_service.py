@@ -579,29 +579,26 @@ async def get_pre_venda_detalhe(db: AsyncSession, pre_venda_id: int) -> dict | N
 
 # ── Devolução de item do condicional (pré-venda) ────────────────────────────────
 #
-# Marca/desmarca item_devolvido + quantidade_devolvida em
-# marilia.itens_movimentacao_estoque_pre_venda. Esse campo é específico da
-# pré-venda (condicional) — não tem relação com a devolução pós-venda (troca),
-# que usa marilia.r_pedido_venda_devolucao + itens_movimentacao_estoque_pedido_venda,
-# uma tabela e um mecanismo completamente separados. Confirmado por introspecção
-# de funções/triggers do Postgres de produção antes de implementar.
+# O ERP, ao efetivar o condicional em venda, simplesmente pega todos os itens
+# ainda existentes em marilia.itens_movimentacao_estoque daquela pré-venda —
+# não olha nenhum campo de "devolvido". Por isso a devolução aqui precisa
+# DELETAR o item de verdade (não só marcar), senão o ERP levaria o item
+# devolvido junto pra venda. A FK de itens_movimentacao_estoque_pre_venda pra
+# itens_movimentacao_estoque é ON DELETE CASCADE (confirmado em produção),
+# então basta apagar a linha do item principal.
+#
+# (O campo item_devolvido/quantidade_devolvida em itens_movimentacao_estoque_pre_venda
+# segue existindo no schema, mas não é usado por esse fluxo — ver histórico do
+# módulo pra entender a primeira versão, que usava esse campo, e por que foi
+# trocada por esta.)
 
-async def devolver_item_pre_venda(
-    db: AsyncSession,
-    pre_venda_id: int,
-    item_id: int,
-    desfazer: bool = False,
-) -> dict:
+async def devolver_item_pre_venda(db: AsyncSession, pre_venda_id: int, item_id: int) -> None:
     item = (await db.execute(
         text("""
-            SELECT ime.pk_chave, ABS(ime.quantidade) AS quantidade,
-                   pv.efetivada, pv."fk_pessoas$vendedor" AS vendedor_cabecalho_id,
-                   impv."fk_pessoas$vendedor" AS vendedor_item_id
+            SELECT ime.pk_chave, pv.efetivada
             FROM marilia.itens_movimentacao_estoque ime
             JOIN marilia.pre_venda pv
                 ON pv."fk_movimentacao_estoque$movimentacao_estoque" = ime."fk_movimentacao_estoque$movimentacao_estoque"
-            LEFT JOIN marilia.itens_movimentacao_estoque_pre_venda impv
-                ON impv."fk_itens_movimentacao_estoque$item_movimentacao" = ime.pk_chave
             WHERE ime.pk_chave = :item_id
               AND ime."fk_movimentacao_estoque$movimentacao_estoque" = :pre_venda_id
         """),
@@ -610,37 +607,82 @@ async def devolver_item_pre_venda(
 
     if not item:
         raise NotFoundError("Item da pré-venda", item_id)
-
     if item.efetivada:
-        raise BusinessRuleError("Pré-venda já efetivada — não é possível alterar devolução de itens.")
+        raise BusinessRuleError("Pré-venda já efetivada — não é possível devolver itens.")
 
-    vendedor_id = item.vendedor_item_id or item.vendedor_cabecalho_id
-    quantidade_devolvida = Decimal("0") if desfazer else Decimal(str(item.quantidade))
-    item_devolvido = not desfazer
+    await db.execute(
+        text("DELETE FROM marilia.itens_movimentacao_estoque WHERE pk_chave = :item_id"),
+        {"item_id": item_id},
+    )
+    await db.commit()
+
+
+async def restaurar_item_pre_venda(
+    db: AsyncSession,
+    pre_venda_id: int,
+    produto_id: int,
+    quantidade: Decimal,
+    vr_unitario_bruto: Decimal,
+    vr_desconto_total: Decimal,
+    vr_acrescimo_total: Decimal,
+    vendedor_id: int | None,
+) -> dict:
+    """Desfaz uma devolução recriando o item na pré-venda (o item antigo foi
+    deletado de verdade, então isso gera um pk_chave novo — mesma lógica de
+    inserção usada em `criar_pre_venda`)."""
+    pv = (await db.execute(
+        text('SELECT efetivada FROM marilia.pre_venda WHERE "fk_movimentacao_estoque$movimentacao_estoque" = :id'),
+        {"id": pre_venda_id},
+    )).one_or_none()
+    if not pv:
+        raise NotFoundError("Pré-venda", pre_venda_id)
+    if pv.efetivada:
+        raise BusinessRuleError("Pré-venda já efetivada — não é possível restaurar itens.")
+
+    local_estoque = await _obter_local_estoque_padrao(db)
+
+    r_item = await db.execute(
+        text("""
+            INSERT INTO marilia.itens_movimentacao_estoque
+                ("fk_movimentacao_estoque$movimentacao_estoque", "fk_produtos$produto",
+                 quantidade, "fk_local_estoque$local",
+                 vr_desconto_total, vr_unitario_bruto, vr_acrescimo_total, vr_comissao)
+            VALUES
+                (:pre_venda_id, :produto_id, :quantidade, :local_estoque,
+                 :desconto, :unitario, :acrescimo, 0)
+            RETURNING pk_chave
+        """),
+        {
+            "pre_venda_id": pre_venda_id,
+            "produto_id": produto_id,
+            "quantidade": -abs(quantidade),
+            "local_estoque": local_estoque,
+            "desconto": vr_desconto_total,
+            "unitario": vr_unitario_bruto,
+            "acrescimo": vr_acrescimo_total,
+        },
+    )
+    novo_item_id = r_item.scalar_one()
 
     await db.execute(
         text("""
             INSERT INTO marilia.itens_movimentacao_estoque_pre_venda
                 ("fk_itens_movimentacao_estoque$item_movimentacao", "fk_pessoas$vendedor",
                  quantidade_devolvida, item_devolvido)
-            VALUES (:item_id, :vendedor_id, :quantidade_devolvida, :item_devolvido)
-            ON CONFLICT ("fk_itens_movimentacao_estoque$item_movimentacao") DO UPDATE
-            SET quantidade_devolvida = EXCLUDED.quantidade_devolvida,
-                item_devolvido = EXCLUDED.item_devolvido
+            VALUES (:item_id, :vendedor_id, 0, false)
         """),
-        {
-            "item_id": item_id,
-            "vendedor_id": vendedor_id,
-            "quantidade_devolvida": quantidade_devolvida,
-            "item_devolvido": item_devolvido,
-        },
+        {"item_id": novo_item_id, "vendedor_id": vendedor_id},
     )
     await db.commit()
 
     return {
-        "pk_chave": item_id,
-        "item_devolvido": item_devolvido,
-        "quantidade_devolvida": quantidade_devolvida,
+        "pk_chave": novo_item_id,
+        "produto_id": produto_id,
+        "quantidade": abs(quantidade),
+        "vr_unitario_bruto": vr_unitario_bruto,
+        "vr_desconto_total": vr_desconto_total,
+        "vr_acrescimo_total": vr_acrescimo_total,
+        "vendedor_id": vendedor_id,
     }
 
 
