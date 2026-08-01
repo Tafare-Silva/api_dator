@@ -9,6 +9,7 @@ from app.models.usuario import Usuario
 from app.schemas.vendas import PreVendaInput, PreVendaCriadaResponse
 from app.services.vendas_service import (
     criar_pre_venda,
+    devolver_item_pre_venda,
     get_dashboard,
     get_pedido_venda_detalhe,
     get_pre_venda_detalhe,
@@ -137,3 +138,16 @@ async def criar_pre_venda_endpoint(
     usuario: Usuario = Depends(get_usuario_logado),
 ):
     return await criar_pre_venda(db, dados, usuario.usuario_login)
+
+
+@router.post(
+    "/pre-vendas/{pre_venda_id}/itens/{item_id}/devolver",
+    summary="Marca (ou desmarca) um item do condicional como devolvido",
+)
+async def devolver_item_pre_venda_endpoint(
+    pre_venda_id: int,
+    item_id: int,
+    desfazer: bool = Query(default=False),
+    db: AsyncSession = Depends(get_db),
+):
+    return await devolver_item_pre_venda(db, pre_venda_id, item_id, desfazer=desfazer)

@@ -9,7 +9,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.exceptions import BusinessRuleError
+from app.core.exceptions import BusinessRuleError, NotFoundError
 from app.models.vendas import (
     Funcionario,
     ItemMovimentacaoEstoque,
@@ -574,6 +574,73 @@ async def get_pre_venda_detalhe(db: AsyncSession, pre_venda_id: int) -> dict | N
         "vr_total": vr_total,
         "quantidade_itens": len(itens),
         "itens": itens,
+    }
+
+
+# ── Devolução de item do condicional (pré-venda) ────────────────────────────────
+#
+# Marca/desmarca item_devolvido + quantidade_devolvida em
+# marilia.itens_movimentacao_estoque_pre_venda. Esse campo é específico da
+# pré-venda (condicional) — não tem relação com a devolução pós-venda (troca),
+# que usa marilia.r_pedido_venda_devolucao + itens_movimentacao_estoque_pedido_venda,
+# uma tabela e um mecanismo completamente separados. Confirmado por introspecção
+# de funções/triggers do Postgres de produção antes de implementar.
+
+async def devolver_item_pre_venda(
+    db: AsyncSession,
+    pre_venda_id: int,
+    item_id: int,
+    desfazer: bool = False,
+) -> dict:
+    item = (await db.execute(
+        text("""
+            SELECT ime.pk_chave, ABS(ime.quantidade) AS quantidade,
+                   pv.efetivada, pv."fk_pessoas$vendedor" AS vendedor_cabecalho_id,
+                   impv."fk_pessoas$vendedor" AS vendedor_item_id
+            FROM marilia.itens_movimentacao_estoque ime
+            JOIN marilia.pre_venda pv
+                ON pv."fk_movimentacao_estoque$movimentacao_estoque" = ime."fk_movimentacao_estoque$movimentacao_estoque"
+            LEFT JOIN marilia.itens_movimentacao_estoque_pre_venda impv
+                ON impv."fk_itens_movimentacao_estoque$item_movimentacao" = ime.pk_chave
+            WHERE ime.pk_chave = :item_id
+              AND ime."fk_movimentacao_estoque$movimentacao_estoque" = :pre_venda_id
+        """),
+        {"item_id": item_id, "pre_venda_id": pre_venda_id},
+    )).one_or_none()
+
+    if not item:
+        raise NotFoundError("Item da pré-venda", item_id)
+
+    if item.efetivada:
+        raise BusinessRuleError("Pré-venda já efetivada — não é possível alterar devolução de itens.")
+
+    vendedor_id = item.vendedor_item_id or item.vendedor_cabecalho_id
+    quantidade_devolvida = Decimal("0") if desfazer else Decimal(str(item.quantidade))
+    item_devolvido = not desfazer
+
+    await db.execute(
+        text("""
+            INSERT INTO marilia.itens_movimentacao_estoque_pre_venda
+                ("fk_itens_movimentacao_estoque$item_movimentacao", "fk_pessoas$vendedor",
+                 quantidade_devolvida, item_devolvido)
+            VALUES (:item_id, :vendedor_id, :quantidade_devolvida, :item_devolvido)
+            ON CONFLICT ("fk_itens_movimentacao_estoque$item_movimentacao") DO UPDATE
+            SET quantidade_devolvida = EXCLUDED.quantidade_devolvida,
+                item_devolvido = EXCLUDED.item_devolvido
+        """),
+        {
+            "item_id": item_id,
+            "vendedor_id": vendedor_id,
+            "quantidade_devolvida": quantidade_devolvida,
+            "item_devolvido": item_devolvido,
+        },
+    )
+    await db.commit()
+
+    return {
+        "pk_chave": item_id,
+        "item_devolvido": item_devolvido,
+        "quantidade_devolvida": quantidade_devolvida,
     }
 
 
