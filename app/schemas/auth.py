@@ -4,6 +4,7 @@ from pydantic import BaseModel
 class LoginRequest(BaseModel):
     usuario_login: str
     senha: str
+    empresa: str  # nome do banco da loja, ex: "puro_estilo_bandeirantes"
 
 
 class TokenResponse(BaseModel):
@@ -11,6 +12,8 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     nome_usuario: str
     grupo: str | None = None
+    empresa: str
+    empresa_nome: str
 
 
 class UsuarioLogado(BaseModel):

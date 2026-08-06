@@ -22,3 +22,12 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# Lojas do cliente (matriz + filiais) — mesmo host/usuário/senha, um banco
+# Postgres por loja no ERP Delphi. Chave = nome do banco (também usado como
+# claim "empresa" no JWT); valor = nome exibido no app.
+EMPRESAS: dict[str, str] = {
+    "puro_estilo_bandeirantes": "Feminino/Kids",
+    "puro_estilo_kids": "Linda de Bonito",
+    "puro_estilo_santa_mariana": "Masculino",
+}
