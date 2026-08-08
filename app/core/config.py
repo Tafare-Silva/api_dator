@@ -7,7 +7,9 @@ class Settings(BaseSettings):
     DB_PORT: int = 5432
     DB_USER: str
     DB_PASSWORD: str
-    DB_NAME: str
+    # Legado: antes da multi-loja, definia o único banco usado. Hoje os 3
+    # bancos vêm de EMPRESAS (mais abaixo); pode remover do .env se quiser.
+    DB_NAME: str | None = None
 
     API_V1_STR: str = "/api/v1"
     PROJECT_NAME: str = "Restaurante API"
