@@ -23,6 +23,22 @@ from app.schemas.vendas import PreVendaInput
 TIPO_VENDA = "VENDA DE MERCADORIA"
 TIPO_PRE_VENDA = "PRE-VENDA"
 
+# Nem toda loja tem a coluna cadastros.pessoas.secao (schema diverge entre os
+# bancos legados do ERP) -- verificado uma vez por banco e cacheado aqui, pra
+# não tentar usar a coluna onde ela nem existe.
+_SUPORTA_SECAO: dict[str, bool] = {}
+
+
+async def _tem_coluna_secao(db: AsyncSession) -> bool:
+    nome_banco = db.get_bind().url.database
+    if nome_banco not in _SUPORTA_SECAO:
+        r = (await db.execute(text(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_schema = 'cadastros' AND table_name = 'pessoas' AND column_name = 'secao'"
+        ))).first()
+        _SUPORTA_SECAO[nome_banco] = r is not None
+    return _SUPORTA_SECAO[nome_banco]
+
 
 def _calcular_vr_total_item(item: ItemMovimentacaoEstoque) -> Decimal:
     bruto = abs(item.quantidade) * item.vr_unitario_bruto
@@ -107,7 +123,9 @@ async def get_dashboard(
     # LEFT JOIN LATERAL resolve o vendedor (chave + secao) uma única vez por
     # linha, reaproveitado também na subquery de contagem de pedidos — evita
     # repetir o mesmo lookup por nome 3x como antes.
-    sql_ranking = text("""
+    tem_secao = await _tem_coluna_secao(db)
+    campo_lateral = "p.chave, p.secao" if tem_secao else "p.chave, NULL AS secao"
+    sql_ranking = text(f"""
         SELECT
             rel.nome_vendedor,
             rel.vr_total_vendas,
@@ -125,7 +143,7 @@ async def get_dashboard(
             ) AS qtd_pedidos
         FROM marilia.relatorio_vendas_por_vendedor(:data_inicio, :data_fim) AS rel
         LEFT JOIN LATERAL (
-            SELECT p.chave, p.secao
+            SELECT {campo_lateral}
             FROM cadastros.pessoas p
             WHERE p.nome = rel.nome_vendedor AND p.chave > 0
             ORDER BY p.chave DESC
