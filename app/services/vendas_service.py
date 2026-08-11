@@ -176,17 +176,22 @@ async def get_dashboard(
         secoes_map.setdefault(chave_secao, []).append(item)
 
     secoes = []
-    for nome_secao, itens in secoes_map.items():
-        total_secao = sum((i["total_vendas"] for i in itens), Decimal("0"))
-        qtd_secao = sum(i["quantidade_pedidos"] for i in itens)
-        secoes.append({
-            "secao": nome_secao,
-            "total_vendas": total_secao,
-            "quantidade_pedidos": qtd_secao,
-            "ticket_medio": (total_secao / qtd_secao) if qtd_secao > 0 else Decimal("0"),
-            "ranking_vendedores": sorted(itens, key=lambda i: i["total_vendas"], reverse=True),
-        })
-    secoes.sort(key=lambda s: s["total_vendas"], reverse=True)
+    # Loja sem nenhum vendedor com seção cadastrada (ex: "Linda de Bonito") --
+    # todo mundo cai em "Sem Seção", o que só duplicaria o total geral numa
+    # aba redundante. Nesse caso não devolve seções nenhuma; o app já trata
+    # lista vazia mostrando só os totais gerais, sem abas.
+    if not (len(secoes_map) == 1 and "Sem Seção" in secoes_map):
+        for nome_secao, itens in secoes_map.items():
+            total_secao = sum((i["total_vendas"] for i in itens), Decimal("0"))
+            qtd_secao = sum(i["quantidade_pedidos"] for i in itens)
+            secoes.append({
+                "secao": nome_secao,
+                "total_vendas": total_secao,
+                "quantidade_pedidos": qtd_secao,
+                "ticket_medio": (total_secao / qtd_secao) if qtd_secao > 0 else Decimal("0"),
+                "ranking_vendedores": sorted(itens, key=lambda i: i["total_vendas"], reverse=True),
+            })
+        secoes.sort(key=lambda s: s["total_vendas"], reverse=True)
 
     return {
         "total_vendas": total,
