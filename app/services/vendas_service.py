@@ -448,6 +448,14 @@ async def listar_pre_vendas(
     if cliente_id:
         conditions.append("me.\"fk_pessoas$pessoa\" = :cliente_id")
         params["cliente_id"] = cliente_id
+        # Busca por cliente é usada pela tela de devolução de condicional --
+        # um condicional sem nenhum item (já totalmente devolvido antes) não
+        # tem nada útil pra devolver, não faz sentido aparecer aqui. Escopado
+        # só pra busca por cliente pra não mudar a listagem geral de pré-vendas.
+        conditions.append("""EXISTS (
+            SELECT 1 FROM marilia.itens_movimentacao_estoque ime2
+            WHERE ime2."fk_movimentacao_estoque$movimentacao_estoque" = me.pk_chave
+        )""")
     if efetivada is not None:
         conditions.append("pv.efetivada = :efetivada")
         params["efetivada"] = efetivada
