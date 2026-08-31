@@ -30,6 +30,12 @@ SESSION_FACTORIES: dict[str, async_sessionmaker[AsyncSession]] = {
             echo=settings.DEBUG,
             pool_size=10,
             max_overflow=20,
+            # DB_HOST/PORT agora aponta pro PgBouncer (pool_mode transaction),
+            # que não sustenta prepared statements entre requisições -- sem
+            # isso, todo SELECT parametrizado falha com
+            # "prepared statement ... does not exist". Desliga o cache de
+            # prepared statements do asyncpg, que é quem tenta reusá-los.
+            connect_args={"statement_cache_size": 0},
         ),
         class_=AsyncSession,
         expire_on_commit=False,
