@@ -2,6 +2,7 @@
 Serviço de vendas — toda a lógica de consulta fica aqui,
 os endpoints são apenas roteadores finos.
 """
+import asyncio
 from datetime import date
 from decimal import Decimal
 
@@ -9,6 +10,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.config import EMPRESAS
 from app.core.exceptions import BusinessRuleError, NotFoundError
 from app.models.vendas import (
     Funcionario,
@@ -219,6 +221,56 @@ async def get_dashboard(
         "quantidade_pedidos_hoje": qtd_hoje,
         "ranking_vendedores": ranking,
         "secoes": secoes,
+        "data_inicio": data_inicio,
+        "data_fim": data_fim,
+    }
+
+
+# ── Dashboard consolidado (todas as lojas) ──────────────────────────────────────
+#
+# Postgres não cruza bancos diferentes nativamente -- em vez de pedir pro ERP
+# criar infraestrutura nova (postgres_fdw/dblink) só pra isso, consultamos as
+# 3 lojas em paralelo (cada uma já tem sua própria engine/sessionmaker em
+# SESSION_FACTORIES) e somamos em Python.
+
+async def _dashboard_de_uma_loja(db_name: str, data_inicio: date, data_fim: date) -> dict:
+    from app.db.session import SESSION_FACTORIES  # import tardio evita ciclo com db.session
+
+    try:
+        async with SESSION_FACTORIES[db_name]() as db:
+            dados = await get_dashboard(db, data_inicio=data_inicio, data_fim=data_fim)
+        return {"empresa": db_name, "empresa_nome": EMPRESAS[db_name], "erro": None, **dados}
+    except Exception as e:
+        # Uma loja fora do ar (erro de permissão, coluna faltando, banco
+        # indisponível) não pode derrubar a visão consolidada das outras.
+        return {
+            "empresa": db_name,
+            "empresa_nome": EMPRESAS[db_name],
+            "erro": str(e),
+            "total_vendas": Decimal("0"),
+            "quantidade_pedidos": 0,
+            "ticket_medio": Decimal("0"),
+            "total_vendas_hoje": Decimal("0"),
+            "quantidade_pedidos_hoje": 0,
+            "ranking_vendedores": [],
+            "secoes": [],
+            "data_inicio": data_inicio,
+            "data_fim": data_fim,
+        }
+
+
+async def get_dashboard_consolidado(data_inicio: date, data_fim: date) -> dict:
+    por_loja = await asyncio.gather(*[
+        _dashboard_de_uma_loja(db_name, data_inicio, data_fim) for db_name in EMPRESAS
+    ])
+    validas = [l for l in por_loja if l["erro"] is None]
+
+    return {
+        "por_loja": list(por_loja),
+        "total_vendas": sum((l["total_vendas"] for l in validas), Decimal("0")),
+        "quantidade_pedidos": sum(l["quantidade_pedidos"] for l in validas),
+        "total_vendas_hoje": sum((l["total_vendas_hoje"] for l in validas), Decimal("0")),
+        "quantidade_pedidos_hoje": sum(l["quantidade_pedidos_hoje"] for l in validas),
         "data_inicio": data_inicio,
         "data_fim": data_fim,
     }

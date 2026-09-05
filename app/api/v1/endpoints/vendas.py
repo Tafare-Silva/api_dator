@@ -3,7 +3,7 @@ from datetime import date, timedelta
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import get_usuario_logado
+from app.core.deps import get_admin, get_usuario_logado
 from app.db.session import get_db
 from app.models.usuario import Usuario
 from app.schemas.vendas import ItemPreVendaInput, PreVendaInput, PreVendaCriadaResponse
@@ -11,6 +11,7 @@ from app.services.vendas_service import (
     criar_pre_venda,
     devolver_item_pre_venda,
     get_dashboard,
+    get_dashboard_consolidado,
     get_pedido_venda_detalhe,
     get_pre_venda_detalhe,
     listar_pedidos_venda,
@@ -47,6 +48,24 @@ async def get_dashboard_vendas(
         data_inicio = hoje.replace(day=1)  # primeiro dia do mês
 
     return await get_dashboard(db, data_inicio=data_inicio, data_fim=data_fim)
+
+
+@router.get(
+    "/dashboard-consolidado",
+    summary="Dashboard somado das 3 lojas (admin)",
+)
+async def get_dashboard_consolidado_endpoint(
+    data_inicio: date = Query(default=None, description="Padrão: primeiro dia do mês atual"),
+    data_fim: date = Query(default=None, description="Padrão: hoje"),
+    usuario: Usuario = Depends(get_admin),
+):
+    hoje = date.today()
+    if not data_fim:
+        data_fim = hoje
+    if not data_inicio:
+        data_inicio = hoje.replace(day=1)
+
+    return await get_dashboard_consolidado(data_inicio, data_fim)
 
 
 # ── Pedidos de Venda ──────────────────────────────────────────────────────────
