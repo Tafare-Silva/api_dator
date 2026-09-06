@@ -3,6 +3,7 @@ Serviço de vendas — toda a lógica de consulta fica aqui,
 os endpoints são apenas roteadores finos.
 """
 import asyncio
+import logging
 from datetime import date
 from decimal import Decimal
 
@@ -236,27 +237,40 @@ async def get_dashboard(
 async def _dashboard_de_uma_loja(db_name: str, data_inicio: date, data_fim: date) -> dict:
     from app.db.session import SESSION_FACTORIES  # import tardio evita ciclo com db.session
 
-    try:
-        async with SESSION_FACTORIES[db_name]() as db:
-            dados = await get_dashboard(db, data_inicio=data_inicio, data_fim=data_fim)
-        return {"empresa": db_name, "empresa_nome": EMPRESAS[db_name], "erro": None, **dados}
-    except Exception as e:
-        # Uma loja fora do ar (erro de permissão, coluna faltando, banco
-        # indisponível) não pode derrubar a visão consolidada das outras.
-        return {
-            "empresa": db_name,
-            "empresa_nome": EMPRESAS[db_name],
-            "erro": str(e),
-            "total_vendas": Decimal("0"),
-            "quantidade_pedidos": 0,
-            "ticket_medio": Decimal("0"),
-            "total_vendas_hoje": Decimal("0"),
-            "quantidade_pedidos_hoje": 0,
-            "ranking_vendedores": [],
-            "secoes": [],
-            "data_inicio": data_inicio,
-            "data_fim": data_fim,
-        }
+    # As 3 lojas são consultadas ao mesmo tempo (asyncio.gather); se essa é a
+    # primeira vez que o processo abre conexão com uma delas (logo após um
+    # restart, por exemplo), abrir as 3 simultaneamente pode disputar recurso
+    # no PgBouncer e uma delas falhar por um instante -- daí funcionar ao dar
+    # "puxar pra atualizar" logo em seguida (conexão já aquecida). Uma
+    # segunda tentativa cobre esse caso sem precisar investigar o PgBouncer.
+    ultimo_erro: Exception | None = None
+    for tentativa in range(2):
+        try:
+            async with SESSION_FACTORIES[db_name]() as db:
+                dados = await get_dashboard(db, data_inicio=data_inicio, data_fim=data_fim)
+            return {"empresa": db_name, "empresa_nome": EMPRESAS[db_name], "erro": None, **dados}
+        except Exception as e:
+            ultimo_erro = e
+            logging.exception("Dashboard consolidado: falha ao consultar %s (tentativa %d)", db_name, tentativa + 1)
+            if tentativa == 0:
+                await asyncio.sleep(0.5)
+
+    # Loja fora do ar de verdade (erro de permissão, coluna faltando, banco
+    # indisponível) não pode derrubar a visão consolidada das outras.
+    return {
+        "empresa": db_name,
+        "empresa_nome": EMPRESAS[db_name],
+        "erro": str(ultimo_erro),
+        "total_vendas": Decimal("0"),
+        "quantidade_pedidos": 0,
+        "ticket_medio": Decimal("0"),
+        "total_vendas_hoje": Decimal("0"),
+        "quantidade_pedidos_hoje": 0,
+        "ranking_vendedores": [],
+        "secoes": [],
+        "data_inicio": data_inicio,
+        "data_fim": data_fim,
+    }
 
 
 async def get_dashboard_consolidado(data_inicio: date, data_fim: date) -> dict:
