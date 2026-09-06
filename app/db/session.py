@@ -1,3 +1,5 @@
+import uuid
+
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.pool import NullPool
@@ -30,20 +32,24 @@ SESSION_FACTORIES: dict[str, async_sessionmaker[AsyncSession]] = {
             _url_para(db_name),
             echo=settings.DEBUG,
             # DB_HOST/PORT agora aponta pro PgBouncer (pool_mode transaction).
-            # Ter o SQLAlchemy MANTENDO seu próprio pool de conexões (antes:
-            # pool_size=10) em cima do pool do PgBouncer é o que causava os
-            # erros de "prepared statement": uma conexão do SQLAlchemy fica
-            # aberta por muito tempo e acaba sendo roteada pelo PgBouncer pra
-            # backends físicos diferentes do Postgres ao longo do tempo, e um
-            # nome de prepared statement gerado por ela pode colidir com o de
-            # outro cliente que passou por aquele mesmo backend. NullPool tira
-            # o SQLAlchemy da jogada -- cada request abre uma conexão nova
-            # (barato, o PgBouncer que já faz esse pooling de verdade) -- e
-            # statement_cache_size=0 desliga o cache de prepared statements do
-            # asyncpg. As duas coisas juntas são a combinação recomendada pra
-            # asyncpg + PgBouncer em modo transaction.
+            # NullPool tira o SQLAlchemy de manter conexões próprias por cima
+            # do pool do PgBouncer (evita conexões antigas sendo roteadas pra
+            # backends físicos diferentes ao longo do tempo).
+            # statement_cache_size=0 desliga o cache/reuso de prepared
+            # statements do asyncpg -- mas mesmo sem cache, o asyncpg ainda dá
+            # um nome SEQUENCIAL (__asyncpg_stmt_1__, _2__, ...) a cada
+            # statement novo, e esse contador reinicia do zero em toda conexão
+            # nova. Com várias conexões desse tipo passando pelo mesmo backend
+            # físico via PgBouncer, duas acabam tentando usar o mesmo nome
+            # sequencial ao mesmo tempo -> "prepared statement already
+            # exists". prepared_statement_name_func gera um nome único de
+            # verdade (uuid) por statement, eliminando a colisão na raiz --
+            # essa é a solução oficial do próprio asyncpg pra uso com PgBouncer.
             poolclass=NullPool,
-            connect_args={"statement_cache_size": 0},
+            connect_args={
+                "statement_cache_size": 0,
+                "prepared_statement_name_func": lambda: f"__asyncpg_{uuid.uuid4()}__",
+            },
         ),
         class_=AsyncSession,
         expire_on_commit=False,
