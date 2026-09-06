@@ -1,5 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.pool import NullPool
 from urllib.parse import quote_plus
 from typing import AsyncGenerator
 
@@ -28,13 +29,20 @@ SESSION_FACTORIES: dict[str, async_sessionmaker[AsyncSession]] = {
         bind=create_async_engine(
             _url_para(db_name),
             echo=settings.DEBUG,
-            pool_size=10,
-            max_overflow=20,
-            # DB_HOST/PORT agora aponta pro PgBouncer (pool_mode transaction),
-            # que não sustenta prepared statements entre requisições -- sem
-            # isso, todo SELECT parametrizado falha com
-            # "prepared statement ... does not exist". Desliga o cache de
-            # prepared statements do asyncpg, que é quem tenta reusá-los.
+            # DB_HOST/PORT agora aponta pro PgBouncer (pool_mode transaction).
+            # Ter o SQLAlchemy MANTENDO seu próprio pool de conexões (antes:
+            # pool_size=10) em cima do pool do PgBouncer é o que causava os
+            # erros de "prepared statement": uma conexão do SQLAlchemy fica
+            # aberta por muito tempo e acaba sendo roteada pelo PgBouncer pra
+            # backends físicos diferentes do Postgres ao longo do tempo, e um
+            # nome de prepared statement gerado por ela pode colidir com o de
+            # outro cliente que passou por aquele mesmo backend. NullPool tira
+            # o SQLAlchemy da jogada -- cada request abre uma conexão nova
+            # (barato, o PgBouncer que já faz esse pooling de verdade) -- e
+            # statement_cache_size=0 desliga o cache de prepared statements do
+            # asyncpg. As duas coisas juntas são a combinação recomendada pra
+            # asyncpg + PgBouncer em modo transaction.
+            poolclass=NullPool,
             connect_args={"statement_cache_size": 0},
         ),
         class_=AsyncSession,
