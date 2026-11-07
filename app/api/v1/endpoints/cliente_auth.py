@@ -15,7 +15,7 @@ _SECRET_PADRAO = "troque-esta-chave-em-producao"
 class ClienteLoginRequest(BaseModel):
     cpf: str
     loja: str
-    verificacao: str  # últimos 4 dígitos do celular OU data de nascimento (ddmmaaaa)
+    verificacao: str = ""  # só usada nos modos celular (4 últimos dígitos) e nascimento (ddmmaaaa)
 
 
 class ClienteTokenResponse(BaseModel):

@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 
-MODOS_VALIDOS = ("celular", "nascimento")
+MODOS_VALIDOS = ("cpf", "celular", "nascimento")
 
 # Falhas recentes por chave (cpf / ip). Em memória: vale por processo, e a API
 # roda com 1 worker. Se passar a ter vários, trocar por Redis ou tabela.
@@ -87,7 +87,11 @@ async def autenticar_cliente(db: AsyncSession, cpf: str, verificacao: str) -> di
         return None
     p = linhas[0]
 
-    if settings.CLIENTE_LOGIN_MODO == "celular":
+    if settings.CLIENTE_LOGIN_MODO == "cpf":
+        # Só CPF: quem souber o CPF de um cliente cadastrado entra como ele.
+        # A defesa fica no bloqueio por tentativas e nos limites do condicional.
+        ok = True
+    elif settings.CLIENTE_LOGIN_MODO == "celular":
         esperado = apenas_digitos(p["celular_principal"])[-4:]
         informado = apenas_digitos(verificacao)
         ok = len(esperado) == 4 and hmac.compare_digest(esperado, informado)

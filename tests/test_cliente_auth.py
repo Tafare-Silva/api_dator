@@ -99,3 +99,9 @@ def test_falhas_antigas_saem_da_janela(monkeypatch):
 def test_apenas_digitos():
     assert svc.apenas_digitos("123.456.789-09") == "12345678909"
     assert svc.apenas_digitos(None) == ""
+
+
+def test_modo_cpf_nao_exige_verificacao_e_modo_e_valido():
+    assert "cpf" in svc.MODOS_VALIDOS
+    from app.api.v1.endpoints.cliente_auth import ClienteLoginRequest
+    assert ClienteLoginRequest(cpf="123", loja=LOJA).verificacao == ""
