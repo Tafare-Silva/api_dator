@@ -22,7 +22,11 @@ class Settings(BaseSettings):
     # CLIENTE_ENVIO_PROVEDOR: '' = desligado (503); 'log' = so grava o codigo no
     # log do servidor (TESTE, nao envia nada); provedores reais entram em
     # app/services/notificacao_service.py.
-    CLIENTE_ENVIO_PROVEDOR: str = ''
+    CLIENTE_ENVIO_PROVEDOR: str = ''  # '', 'log' ou 'evolution'
+    # Evolution API (WhatsApp nao oficial): URL base, nome da instancia e apikey.
+    EVOLUTION_URL: str = ''
+    EVOLUTION_INSTANCE: str = ''
+    EVOLUTION_API_KEY: str = ''
     CLIENTE_CODIGO_VALIDADE_MIN: int = 10
     CLIENTE_CODIGO_REENVIO_SEG: int = 60
     CLIENTE_VENDEDOR_PADRAO: str = 'Camila'
