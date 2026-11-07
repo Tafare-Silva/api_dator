@@ -18,6 +18,14 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "troque-esta-chave-em-producao"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 480
 
+    # Area do Cliente (cliente final). CLIENTE_LOGIN_MODO: 'celular' (4 ultimos
+    # digitos do celular cadastrado) ou 'nascimento' (se a coluna existir no
+    # banco da loja). Vazio = login do cliente DESLIGADO (503).
+    CLIENTE_LOGIN_MODO: str = ''
+    CLIENTE_TOKEN_MINUTOS: int = 120
+    CLIENTE_MAX_TENTATIVAS: int = 5
+    CLIENTE_JANELA_BLOQUEIO_MIN: int = 15
+
     class Config:
         env_file = ".env"
         case_sensitive = True
