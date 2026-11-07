@@ -36,20 +36,26 @@ CONSULTAS = {
         FROM cadastros.produtos p
         JOIN cadastros.v_estoque_atual e ON e."fk_produtos$produto" = p.pk_chave AND e.saldo > 0
         WHERE NOT p.inativo GROUP BY 1 ORDER BY 2 DESC""",
-    "clientes: dados para login": r"""
+    "colunas de cadastros.pessoas (so nomes)": """
+        SELECT column_name FROM information_schema.columns
+        WHERE table_schema='cadastros' AND table_name='pessoas'
+          AND (column_name ILIKE '%nasc%' OR column_name ILIKE '%fone%' OR column_name ILIKE '%cel%'
+               OR column_name ILIKE '%mail%' OR column_name ILIKE '%cpf%' OR column_name ILIKE '%whats%')
+        ORDER BY 1""",
+    "clientes: CPF e celular": r"""
         SELECT count(*) AS clientes_ativos,
-               count(*) FILTER (WHERE coalesce(trim(cpf_cnpj),'')='') AS sem_documento,
                count(*) FILTER (WHERE length(regexp_replace(coalesce(cpf_cnpj,''),'\D','','g'))=11) AS com_cpf,
-               count(*) FILTER (WHERE dt_nascimento IS NULL) AS sem_nascimento,
                count(*) FILTER (WHERE coalesce(trim(celular_principal),'')='') AS sem_celular,
                count(*) FILTER (WHERE length(regexp_replace(coalesce(celular_principal,''),'\D','','g')) IN (10,11)) AS celular_formato_ok
         FROM cadastros.pessoas WHERE cliente AND NOT coalesce(inativo, false)""",
-    "CPFs repetidos entre clientes": r"""
-        SELECT count(*) AS cpfs_repetidos, coalesce(max(n),0) AS maior_repeticao FROM (
-          SELECT count(*) n FROM cadastros.pessoas
-          WHERE cliente AND NOT coalesce(inativo,false)
-            AND length(regexp_replace(coalesce(cpf_cnpj,''),'\D','','g'))=11
-          GROUP BY regexp_replace(cpf_cnpj,'\D','','g') HAVING count(*)>1) x""",
+    "CPFs repetidos (2-5 vezes = homonimos; mais de 5 = provavel CPF padrao)": r"""
+        SELECT count(*) FILTER (WHERE n BETWEEN 2 AND 5) AS cpfs_repetidos_2_a_5,
+               count(*) FILTER (WHERE n > 5) AS cpfs_repetidos_mais_de_5,
+               coalesce(sum(n) FILTER (WHERE n BETWEEN 2 AND 5),0) AS cadastros_afetados_2_a_5
+        FROM (SELECT count(*) n FROM cadastros.pessoas
+              WHERE cliente AND NOT coalesce(inativo,false)
+                AND length(regexp_replace(coalesce(cpf_cnpj,''),'\D','','g'))=11
+              GROUP BY regexp_replace(cpf_cnpj,'\D','','g')) x""",
     "vendedores em pre-vendas": 'SELECT count(*) AS pre_vendas, count("fk_pessoas$vendedor") AS com_vendedor '
                                 "FROM marilia.pre_venda",
     "historico de compra": """
