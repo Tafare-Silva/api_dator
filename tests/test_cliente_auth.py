@@ -54,25 +54,56 @@ def test_token_de_cliente_com_loja_inexistente_e_recusado():
     assert client.get("/api/v1/cliente/auth/me", headers=_auth(t)).status_code == 401
 
 
-def test_login_desligado_sem_modo_configurado(monkeypatch):
+def test_solicitar_codigo_desligado_sem_provedor(monkeypatch):
     monkeypatch.setattr(settings, "SECRET_KEY", "uma-chave-forte-qualquer")
-    monkeypatch.setattr(settings, "CLIENTE_LOGIN_MODO", "")
-    body = {"cpf": "12345678909", "loja": LOJA, "verificacao": "1234"}
-    r = client.post("/api/v1/cliente/auth/login", json=body)
-    # sem banco acessível a consulta falha (500); com banco e sem modo, 503.
-    assert r.status_code in (503, 500)
+    monkeypatch.setattr(settings, "CLIENTE_ENVIO_PROVEDOR", "")
+    body = {"cpf": "12345678909", "loja": LOJA}
+    assert client.post("/api/v1/cliente/auth/solicitar-codigo", json=body).status_code == 503
 
 
-def test_login_recusado_com_secret_key_padrao(monkeypatch):
+def test_recusado_com_secret_key_padrao(monkeypatch):
     monkeypatch.setattr(settings, "SECRET_KEY", "troque-esta-chave-em-producao")
-    body = {"cpf": "12345678909", "loja": LOJA, "verificacao": "1234"}
-    assert client.post("/api/v1/cliente/auth/login", json=body).status_code == 503
+    monkeypatch.setattr(settings, "CLIENTE_ENVIO_PROVEDOR", "log")
+    body = {"cpf": "12345678909", "loja": LOJA}
+    assert client.post("/api/v1/cliente/auth/solicitar-codigo", json=body).status_code == 503
 
 
-def test_login_com_loja_invalida(monkeypatch):
+def test_loja_invalida(monkeypatch):
     monkeypatch.setattr(settings, "SECRET_KEY", "uma-chave-forte-qualquer")
-    body = {"cpf": "12345678909", "loja": "nao_existe", "verificacao": "1234"}
-    assert client.post("/api/v1/cliente/auth/login", json=body).status_code == 422
+    monkeypatch.setattr(settings, "CLIENTE_ENVIO_PROVEDOR", "log")
+    body = {"cpf": "12345678909", "loja": "nao_existe"}
+    assert client.post("/api/v1/cliente/auth/solicitar-codigo", json=body).status_code == 422
+
+
+def test_codigo_vale_uma_vez_e_erra_demais_invalida(monkeypatch):
+    monkeypatch.setattr(settings, "SECRET_KEY", "uma-chave-forte-qualquer")
+    cod = svc.gerar_codigo(LOJA, "111")
+    assert not svc.conferir_codigo(LOJA, "111", "000000" if cod != "000000" else "999999")
+    assert svc.conferir_codigo(LOJA, "111", cod)
+    assert not svc.conferir_codigo(LOJA, "111", cod)  # já usado
+    cod = svc.gerar_codigo(LOJA, "222")
+    for _ in range(svc.MAX_ERROS_CODIGO):
+        svc.conferir_codigo(LOJA, "222", "abcdef")
+    assert not svc.conferir_codigo(LOJA, "222", cod)  # invalidado
+
+
+def test_codigo_expirado(monkeypatch):
+    monkeypatch.setattr(settings, "SECRET_KEY", "uma-chave-forte-qualquer")
+    cod = svc.gerar_codigo(LOJA, "333")
+    svc._codigos[(LOJA, "333")]["exp"] = time.time() - 1
+    assert not svc.conferir_codigo(LOJA, "333", cod)
+
+
+def test_normalizar_celular():
+    assert svc.normalizar_celular("(67) 99999-1234") == "5567999991234"
+    assert svc.normalizar_celular("5567999991234") == "5567999991234"
+    assert svc.normalizar_celular("1234") is None and svc.normalizar_celular(None) is None
+
+
+def test_catalogo_publico_valida_loja():
+    assert client.get("/api/v1/cliente/catalogo/?loja=xx").status_code == 422
+    assert client.get("/api/v1/cliente/catalogo/filtros?loja=xx").status_code == 422
+    assert client.get("/api/v1/cliente/catalogo/1/foto?loja=xx").status_code == 422
 
 
 def test_bloqueio_apos_varias_falhas(monkeypatch):
@@ -99,9 +130,3 @@ def test_falhas_antigas_saem_da_janela(monkeypatch):
 def test_apenas_digitos():
     assert svc.apenas_digitos("123.456.789-09") == "12345678909"
     assert svc.apenas_digitos(None) == ""
-
-
-def test_modo_cpf_nao_exige_verificacao_e_modo_e_valido():
-    assert "cpf" in svc.MODOS_VALIDOS
-    from app.api.v1.endpoints.cliente_auth import ClienteLoginRequest
-    assert ClienteLoginRequest(cpf="123", loja=LOJA).verificacao == ""
