@@ -66,7 +66,7 @@ async def listar(
             "id": r["pk_chave"], "nome": r["nome"], "referencia": r["referencia_fabrica"],
             "cor": r["cor"], "tamanho": r["tamanho"], "colecao": _norm(r["colecao"]),
             "genero": _norm(r["genero"]), "divisao": _norm(r["divisao"]),
-            "preco": float(r["preco"] or 0), "disponivel": int(r["saldo"]),
+            "preco": float(r["preco"] or 0),
         }
         for r in rows
     ]
