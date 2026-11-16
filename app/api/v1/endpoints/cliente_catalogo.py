@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession  # noqa: F401
 from app.core.config import EMPRESAS
 from app.db.session import SESSION_FACTORIES
 from app.services import cliente_catalogo_service as svc
+from app.services import cliente_fotos_service as fotos
 
 # Público: o cliente navega sem login. Nada aqui devolve dado de cliente.
 router = APIRouter(prefix="/cliente/catalogo", tags=["Área do Cliente - Catálogo"])
@@ -41,10 +42,10 @@ async def filtros(loja: str):
         return await svc.filtros(db)
 
 
-@router.get("/{produto_id}/foto", summary="Foto do produto")
-async def foto(produto_id: int, loja: str):
+@router.get("/{produto_id}/foto", summary="Foto do produto (reduzida)")
+async def foto(produto_id: int, loja: str, tamanho: str = Query("mini", pattern="^(mini|grande)$")):
     async with SESSION_FACTORIES[_loja(loja)]() as db:
-        b = await svc.foto(db, produto_id)
+        b = await fotos.foto(db, loja, produto_id, tamanho)
     if not b:
         raise HTTPException(404, "Sem foto.")
     return Response(b, media_type=_tipo_imagem(b), headers={"Cache-Control": "public, max-age=86400"})

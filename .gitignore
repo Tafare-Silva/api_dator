@@ -29,3 +29,5 @@ web_build/
 # Sistemas operacionais
 .DS_Store
 Thumbs.db
+# Cache de miniaturas das fotos (gerado em tempo de execucao)
+cache_fotos/

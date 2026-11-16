@@ -88,13 +88,3 @@ async def filtros(db: AsyncSession) -> dict:
             f"SELECT count(*) {base} AND p.data_cadastramento >= current_date - 30"))).scalar()
         out["tem_novidades"] = bool(n)
     return out
-
-
-async def foto(db: AsyncSession, produto_id: int) -> bytes | None:
-    r = (await db.execute(text("""
-        SELECT i.imagem FROM cadastros.produtos p
-        JOIN cadastros.imagem_produto i ON i."fk_produtos$produto" = p.pk_chave
-        WHERE p.pk_chave = :id AND NOT coalesce(p.inativo,false) AND octet_length(i.imagem) > 0
-        ORDER BY (i.pk_chave = p."fk_imagem_produto$imagem_principal") DESC, i.pk_chave
-        LIMIT 1"""), {"id": produto_id})).first()
-    return bytes(r[0]) if r else None
