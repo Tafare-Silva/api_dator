@@ -29,7 +29,12 @@ class Settings(BaseSettings):
     EVOLUTION_API_KEY: str = ''
     CLIENTE_CODIGO_VALIDADE_MIN: int = 10
     CLIENTE_CODIGO_REENVIO_SEG: int = 60
-    CLIENTE_VENDEDOR_PADRAO: str = 'Camila'
+    # Vendedor que recebe os condicionais gerados pelo app. Achado pelo NOME EXATO
+    # (sem diferenciar maiusculas/espacos) entre os cadastros ativos; se houver
+    # zero ou mais de um, o condicional e recusado. Para fixar por loja use
+    # CLIENTE_VENDEDOR_IDS="banco1:123,banco2:456" (codigo da pessoa em cada banco).
+    CLIENTE_VENDEDOR_PADRAO: str = 'LOJA FEMININO'
+    CLIENTE_VENDEDOR_IDS: str = ''
     CLIENTE_MAX_ITENS_CONDICIONAL: int = 10
     CLIENTE_MAX_CONDICIONAIS_ABERTOS: int = 2
     CLIENTE_TOKEN_MINUTOS: int = 120

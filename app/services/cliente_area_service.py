@@ -19,14 +19,30 @@ _FOTO = """EXISTS (SELECT 1 FROM cadastros.imagem_produto i
           WHERE i."fk_produtos$produto" = p.pk_chave AND octet_length(i.imagem) > 0)"""
 
 
+def _vendedor_fixo(banco: str) -> int | None:
+    for par in settings.CLIENTE_VENDEDOR_IDS.split(","):
+        nome, _, cod = par.partition(":")
+        if nome.strip() == banco and cod.strip().isdigit():
+            return int(cod)
+    return None
+
+
 async def _vendedor_padrao(db: AsyncSession) -> int:
-    nome = settings.CLIENTE_VENDEDOR_PADRAO.strip()
+    """Código fixado para a loja, ou o único cadastro ativo com o nome exato."""
+    if (fixo := _vendedor_fixo(db.get_bind().url.database)) is not None:
+        existe = (await db.execute(text(
+            "SELECT 1 FROM cadastros.pessoas WHERE chave = :c AND NOT coalesce(inativo,false)"),
+            {"c": fixo})).first()
+        if not existe:
+            raise BusinessRuleError("Não foi possível gerar o condicional agora. Fale com a loja.")
+        return fixo
+    nome = " ".join(settings.CLIENTE_VENDEDOR_PADRAO.split())
     if not nome:
         raise BusinessRuleError("Vendedor padrão não configurado.")
     rows = (await db.execute(text(r"""
         SELECT p.chave FROM cadastros.pessoas p
-        WHERE coalesce(p.funcionario, false) AND NOT coalesce(p.inativo, false)
-          AND (upper(trim(p.nome)) = upper(:n) OR upper(p.nome) LIKE upper(:n) || ' %')
+        WHERE NOT coalesce(p.inativo, false)
+          AND upper(regexp_replace(trim(p.nome), '\s+', ' ', 'g')) = upper(:n)
         LIMIT 3"""), {"n": nome})).all()
     if len(rows) != 1:
         # nenhuma ou várias: melhor recusar do que gravar com o vendedor errado
