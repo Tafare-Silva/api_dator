@@ -85,17 +85,23 @@ def _gravar_disco(chave: str, dados: bytes) -> None:
         pass
 
 
-async def foto(db: AsyncSession, loja: str, produto_id: int, tamanho: str) -> bytes | None:
+async def foto(db: AsyncSession, loja: str, produto_id: int, tamanho: str,
+               img: int | None = None) -> bytes | None:
+    """[img] = código de uma foto específica do produto; sem ele, a principal."""
     if tamanho not in TAMANHOS:
         tamanho = "mini"
     # Primeiro só os metadados (barato); o conteúdo só é lido se faltar no cache.
-    meta = (await db.execute(text("""
+    # A foto escolhida precisa ser deste produto (e o produto, ativo).
+    filtro_img = "AND i.pk_chave = :img" if img is not None else ""
+    params = {"id": produto_id, **({"img": img} if img is not None else {})}
+    meta = (await db.execute(text(f"""
         SELECT i.pk_chave, octet_length(i.imagem) AS bytes
         FROM cadastros.produtos p
         JOIN cadastros.imagem_produto i ON i."fk_produtos$produto" = p.pk_chave
         WHERE p.pk_chave = :id AND NOT coalesce(p.inativo,false) AND octet_length(i.imagem) > 0
+          {filtro_img}
         ORDER BY (i.pk_chave = p."fk_imagem_produto$imagem_principal") DESC, i.pk_chave
-        LIMIT 1"""), {"id": produto_id})).first()
+        LIMIT 1"""), params)).first()
     if not meta:
         return None
     chave = f"{loja}_{meta[0]}_{meta[1]}_{tamanho}.jpg"

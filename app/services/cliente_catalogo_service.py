@@ -12,7 +12,14 @@ _TEM_DT_CADASTRO: dict[str, bool] = {}
 _FOTO = """EXISTS (SELECT 1 FROM cadastros.imagem_produto i
           WHERE i."fk_produtos$produto" = p.pk_chave AND octet_length(i.imagem) > 0)"""
 
-_ESTOQUE = """JOIN (SELECT "fk_produtos$produto" AS pid, SUM(saldo) AS saldo
+# Foto principal (a marcada no produto; senão a primeira) e seu tamanho.
+_FOTO_PRINCIPAL = """SELECT i.pk_chave AS img, octet_length(i.imagem) AS bytes
+          FROM cadastros.imagem_produto i
+          WHERE i."fk_produtos$produto" = p.pk_chave AND octet_length(i.imagem) > 0
+          ORDER BY (i.pk_chave = p."fk_imagem_produto$imagem_principal") DESC, i.pk_chave
+          LIMIT 1"""
+
+_ESTOQUE ="""JOIN (SELECT "fk_produtos$produto" AS pid, SUM(saldo) AS saldo
                 FROM cadastros.v_estoque_atual GROUP BY 1 HAVING SUM(saldo) > 0) e
               ON e.pid = p.pk_chave"""
 
@@ -36,7 +43,7 @@ async def listar(
     db: AsyncSession, busca=None, divisao=None, genero=None, colecao=None,
     novidades: bool = False, limit: int = 30, offset: int = 0,
 ) -> list[dict]:
-    where = ["NOT coalesce(p.inativo, false)", _FOTO]
+    where = ["NOT coalesce(p.inativo, false)"]
     params: dict = {"limit": min(max(limit, 1), 60), "offset": max(offset, 0)}
     if b := _norm(busca):
         where.append("(p.nome ILIKE :busca OR p.referencia_fabrica ILIKE :busca)")
@@ -55,8 +62,10 @@ async def listar(
     rows = (await db.execute(text(f"""
         SELECT p.pk_chave, p.nome, p.referencia_fabrica, p.cor, p.tamanho, p.colecao,
                p.genero, trim(p."fk_divisoes$divisao") AS divisao,
-               marilia.obter_preco_venda(p.pk_chave) AS preco, e.saldo
+               marilia.obter_preco_venda(p.pk_chave) AS preco, e.saldo,
+               f.img, f.bytes
         FROM cadastros.produtos p {_ESTOQUE}
+        JOIN LATERAL ({_FOTO_PRINCIPAL}) f ON true
         WHERE {' AND '.join(where)}
         ORDER BY p.nome, p.pk_chave
         LIMIT :limit OFFSET :offset
@@ -67,9 +76,24 @@ async def listar(
             "cor": r["cor"], "tamanho": r["tamanho"], "colecao": _norm(r["colecao"]),
             "genero": _norm(r["genero"]), "divisao": _norm(r["divisao"]),
             "preco": float(r["preco"] or 0),
+            # muda quando a foto principal é trocada no ERP: o app põe isso na URL
+            # da foto, então o navegador não reaproveita a imagem antiga do cache
+            "foto_v": f"{r['img']}-{r['bytes']}",
         }
         for r in rows
     ]
+
+
+async def fotos_do_produto(db: AsyncSession, produto_id: int) -> list[dict]:
+    """Todas as fotos do produto (principal primeiro). Vazio se o produto não é listável."""
+    rows = (await db.execute(text("""
+        SELECT i.pk_chave, octet_length(i.imagem) AS bytes
+        FROM cadastros.produtos p
+        JOIN cadastros.imagem_produto i ON i."fk_produtos$produto" = p.pk_chave
+        WHERE p.pk_chave = :id AND NOT coalesce(p.inativo, false) AND octet_length(i.imagem) > 0
+        ORDER BY (i.pk_chave = p."fk_imagem_produto$imagem_principal") DESC, i.pk_chave
+        LIMIT 12"""), {"id": produto_id})).all()
+    return [{"id": r[0], "v": f"{r[0]}-{r[1]}"} for r in rows]
 
 
 async def filtros(db: AsyncSession) -> dict:

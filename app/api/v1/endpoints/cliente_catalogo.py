@@ -42,10 +42,22 @@ async def filtros(loja: str):
         return await svc.filtros(db)
 
 
-@router.get("/{produto_id}/foto", summary="Foto do produto (reduzida)")
-async def foto(produto_id: int, loja: str, tamanho: str = Query("mini", pattern="^(mini|grande)$")):
+@router.get("/{produto_id}/fotos", summary="Todas as fotos do produto (principal primeiro)")
+async def fotos_do_produto(produto_id: int, loja: str):
     async with SESSION_FACTORIES[_loja(loja)]() as db:
-        b = await fotos.foto(db, loja, produto_id, tamanho)
+        return await svc.fotos_do_produto(db, produto_id)
+
+
+@router.get("/{produto_id}/foto", summary="Foto do produto (reduzida)")
+async def foto(
+    produto_id: int, loja: str, tamanho: str = Query("mini", pattern="^(mini|grande)$"),
+    img: int | None = None, v: str | None = Query(None, max_length=40),
+):
+    async with SESSION_FACTORIES[_loja(loja)]() as db:
+        b = await fotos.foto(db, loja, produto_id, tamanho, img)
     if not b:
         raise HTTPException(404, "Sem foto.")
-    return Response(b, media_type=_tipo_imagem(b), headers={"Cache-Control": "public, max-age=86400"})
+    # Com "v" (versão da foto na URL) o navegador pode guardar por muito tempo: se a
+    # foto mudar no ERP, a URL muda. Sem "v", cache curto para a troca aparecer logo.
+    cache = "public, max-age=31536000, immutable" if v else "public, max-age=300"
+    return Response(b, media_type=_tipo_imagem(b), headers={"Cache-Control": cache})
