@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps_cliente import ClienteLogado, get_cliente_logado, get_db_cliente
 from app.services import cliente_area_service as svc
+from app.services import cliente_sugestao_service as sugestao_svc
 
 router = APIRouter(prefix="/cliente", tags=["Área do Cliente"])
 
@@ -26,6 +27,14 @@ async def gerar_condicional(
     # Cliente vem do token; preço, estoque e vendedor são resolvidos no servidor.
     return await svc.criar_condicional(
         db, cliente.pessoa_id, [(i.produto_id, i.quantidade) for i in dados.itens])
+
+
+@router.get("/sugestao", summary="Sacola sugerida pelo histórico de compras do cliente logado")
+async def sugestao(
+    cliente: ClienteLogado = Depends(get_cliente_logado),
+    db: AsyncSession = Depends(get_db_cliente),
+):
+    return await sugestao_svc.sugerir(db, cliente.pessoa_id)
 
 
 @router.get("/titulos", summary="Títulos em aberto do cliente logado")
