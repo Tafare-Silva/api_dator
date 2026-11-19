@@ -36,6 +36,12 @@ async def listar(
         return await svc.listar(db, busca, divisao, genero, colecao, novidades, limit, offset)
 
 
+@router.get("/loja", summary="Nome fantasia da loja (cadastro da empresa no ERP)")
+async def loja_info(loja: str):
+    async with SESSION_FACTORIES[_loja(loja)]() as db:
+        return {"nome": await svc.nome_loja(db) or EMPRESAS[loja]}
+
+
 @router.get("/filtros", summary="Divisões, gêneros e coleções disponíveis")
 async def filtros(loja: str):
     async with SESSION_FACTORIES[_loja(loja)]() as db:

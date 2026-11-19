@@ -3,6 +3,8 @@
 Só entra produto ativo, com saldo em estoque e com foto cadastrada.
 Preço sempre vem do banco (marilia.obter_preco_venda).
 """
+import time
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,6 +34,22 @@ async def _tem_dt_cadastro(db: AsyncSession) -> bool:
             "AND table_name='produtos' AND column_name='data_cadastramento'"))
         _TEM_DT_CADASTRO[banco] = r.first() is not None
     return _TEM_DT_CADASTRO[banco]
+
+
+_NOME_LOJA: dict[str, tuple[float, str | None]] = {}  # banco -> (quando, nome fantasia)
+
+
+async def nome_loja(db: AsyncSession) -> str | None:
+    """Nome fantasia da empresa (cadastros.empresas), em cache por 10 min. None se vazio."""
+    banco = db.get_bind().url.database
+    agora = time.monotonic()
+    if (c := _NOME_LOJA.get(banco)) and agora - c[0] < 600:
+        return c[1]
+    v = (await db.execute(text(
+        "SELECT trim(nome_fantasia) FROM cadastros.empresas "
+        "WHERE trim(coalesce(nome_fantasia, '')) <> '' ORDER BY fk_pessoas LIMIT 1"))).scalar()
+    _NOME_LOJA[banco] = (agora, v or None)
+    return v or None
 
 
 def _norm(v: str | None) -> str | None:
